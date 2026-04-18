@@ -1,12 +1,23 @@
 try:
     import dspy
+    from pydantic import BaseModel, Field
     DSPY_AVAILABLE = True
 except ImportError:
     DSPY_AVAILABLE = False
+    class BaseModel: pass
+    def Field(*args, **kwargs): pass
 
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Literal
 
 if DSPY_AVAILABLE:
+    class Insight(BaseModel):
+        """A single categorized insight from a session."""
+        category: Literal["TECHNICAL", "PROCEDURAL", "STRATEGIC", "BLOCKER"] = Field(
+            description="Category of the insight"
+        )
+        content: str = Field(description="Descriptive string (2-3 sentences)")
+        importance: float = Field(description="Importance score between 0.0 and 1.0", ge=0.0, le=1.0)
+
     class SessionTopicExtractor(dspy.Signature):
         """Extract primary topics and activities from session content.
         
@@ -24,24 +35,43 @@ if DSPY_AVAILABLE:
     class SessionInsightExtractor(dspy.Signature):
         """Extract categorized insights from session content.
         
-        Identifies deep patterns including:
-        - TECHNICAL: Architecture decisions, refactoring, code quality, technical debt.
-        - PROCEDURAL: Workflow changes, tool usage, process improvements, habits.
-        - STRATEGIC: Product direction, priority shifts, goal alignment, long-term vision.
-        - BLOCKER: Technical debt, missing dependencies, postponed work, external delays.
-
-        STRICT SCHEMA FOR INSIGHTS:
-        Each insight in the list MUST be a dictionary with EXACTLY these keys:
-        - 'category': One of [TECHNICAL, PROCEDURAL, STRATEGIC, BLOCKER]
-        - 'content': A concise but descriptive string (2-3 sentences)
-        - 'importance': A float between 0.0 and 1.0
+        Identifies deep patterns including architecture decisions, workflow changes,
+        strategic shifts, and blockers.
         """
         
         session_content: str = dspy.InputField(desc="Combined text content from session messages")
         context_metadata: str = dspy.InputField(desc="Platform, project, and temporal context for this session")
-        insights: List[Dict[str, Any]] = dspy.OutputField(desc="List of categorized insight objects. Each MUST have 'category', 'content', and 'importance' keys.")
+        insights: List[Insight] = dspy.OutputField(desc="List of categorized insight objects")
         primary_theme: str = dspy.OutputField(desc="The core theme unifying these specific insights")
         confidence: float = dspy.OutputField(desc="Overall confidence in the insight extraction (0.0-1.0)")
+
+
+    class SessionInput(BaseModel):
+        platform: str
+        summary: str
+        timestamp: str
+
+    class CommitInput(BaseModel):
+        message: str
+        sha: str
+
+    class FileChangeInput(BaseModel):
+        path: str
+        change_type: str
+
+    class TimelineSynthesizer(dspy.Signature):
+        """Synthesize a coherent narrative from multiple data sources.
+        
+        Combines sessions from multiple AI platforms, GitHub commits,
+        and file changes into a unified timeline with actionable insights.
+        """
+        
+        sessions: List[SessionInput] = dspy.InputField(desc="List of session data")
+        commits: List[CommitInput] = dspy.InputField(desc="List of git commits")
+        file_changes: List[FileChangeInput] = dspy.InputField(desc="List of file changes from backup analysis")
+        narrative: str = dspy.OutputField(desc="Coherent narrative of activities (2-3 sentences per platform).")
+        workstreams: List[str] = dspy.OutputField(desc="Distinct workstreams identified. MUST be backed by session volume or commits.")
+        next_actions: List[str] = dspy.OutputField(desc="Suggested next actions, specific and actionable.")
 
 
     class CommitSessionCorrelator(dspy.Signature):
@@ -56,25 +86,6 @@ if DSPY_AVAILABLE:
         session_summaries: List[str] = dspy.InputField(desc="List of session summaries to compare against, each with platform and title")
         relevant_session_indices: List[int] = dspy.OutputField(desc="Indices of most relevant sessions (0-based)")
         confidence_scores: List[float] = dspy.OutputField(desc="Confidence scores (0.0-1.0) for each match")
-
-
-    class TimelineSynthesizer(dspy.Signature):
-        """Synthesize a coherent narrative from multiple data sources.
-        
-        Combines sessions from multiple AI platforms, GitHub commits,
-        and file changes into a unified timeline with actionable insights.
-        
-        STRICT REQUIREMENT: Identify workstreams ONLY if backed by a commit,
-        multiple file changes, or substantial session content in the current window.
-        Do NOT hype new directories or untracked artifacts (??) as "Initiatives."
-        """
-        
-        sessions: List[Dict] = dspy.InputField(desc="List of session data with platform, summary, and timestamp")
-        commits: List[Dict] = dspy.InputField(desc="List of git commits with message and sha")
-        file_changes: List[Dict] = dspy.InputField(desc="List of file changes from backup analysis")
-        narrative: str = dspy.OutputField(desc="Coherent narrative of activities (2-3 sentences per platform). Focus on kinetic energy (work done), not potential (new folders).")
-        workstreams: List[str] = dspy.OutputField(desc="Distinct workstreams identified. MUST be backed by session volume or commits. Label untracked folders as 'Untracked Artifacts'.")
-        next_actions: List[str] = dspy.OutputField(desc="Suggested next actions, specific and actionable. Derived from current momentum.")
 
 
     class OneThingGenerator(dspy.Signature):

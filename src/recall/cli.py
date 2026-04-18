@@ -87,6 +87,43 @@ def main():
 
     if args.command == "extract":
         platforms = args.platforms.split(",") if args.platforms else None
+        
+        # Pre-flight check for tokens if analysis is requested and provider might be paid
+        if args.analyze and correlator.dspy_provider != "ollama":
+            console.print("\n[bold blue]Running pre-flight token estimation...[/bold blue]")
+            
+            # Collect sessions for estimation
+            from datetime import timedelta, timezone
+            cutoff = datetime.now(timezone.utc) - timedelta(days=args.days)
+            date_range = {'start': cutoff, 'end': datetime.now(timezone.utc)}
+            
+            sessions_to_check = []
+            target_platforms = platforms or list(correlator.providers.keys())
+            for p in target_platforms:
+                if p in correlator.providers:
+                    sessions_to_check.extend(correlator.providers[p].extract(date_range))
+            
+            # Filter for sessions that actually need analysis
+            sessions_needing_analysis = []
+            if args.overwrite:
+                sessions_needing_analysis = sessions_to_check
+            else:
+                for s in sessions_to_check:
+                    if not correlator.db.get_analysis(s.id):
+                        sessions_needing_analysis.append(s)
+            
+            total_est = correlator.estimate_session_tokens(sessions_needing_analysis)
+            if total_est > settings.token_warning_threshold:
+                console.print(f"\n[bold yellow]⚠️  PRE-FLIGHT WARNING:[/bold yellow]")
+                console.print(f"Estimated tokens for analysis: [bold]{total_est:,}[/bold]")
+                console.print(f"Provider: [bold]{correlator.dspy_provider}[/bold]")
+                console.print(f"Threshold: {settings.token_warning_threshold:,}")
+                
+                confirm = input("\nProceed with analysis? (This may incur costs) [y/N]: ")
+                if confirm.lower() != 'y':
+                    console.print("[red]Aborted by user.[/red]")
+                    sys.exit(0)
+
         results = correlator.extract_all(
             args.days, 
             platforms, 

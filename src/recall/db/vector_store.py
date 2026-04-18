@@ -7,6 +7,12 @@ from recall.logging import debug, error
 from recall.utils.limiter import get_default_limiter, get_retry_decorator
 
 try:
+    import tiktoken
+    HAS_TIKTOKEN = True
+except ImportError:
+    HAS_TIKTOKEN = False
+
+try:
     import chromadb
     from chromadb.api.types import EmbeddingFunction, Documents, Embeddings
     CHROMA_AVAILABLE = True
@@ -20,11 +26,13 @@ except ImportError:
 class OllamaEmbeddingFunction(EmbeddingFunction):
     """Custom embedding function for Ollama's embeddinggemma model."""
     
-    def __init__(self, host: str = "http://tinybot:11434", model: str = "embeddinggemma"):
+    def __init__(self, host: str = "http://tinybot:11434", model: str = "embeddinggemma", max_tokens: int = 2048):
         self.host = host
         self.model = model
+        self.max_tokens = max_tokens
         self.client = httpx.Client(timeout=60.0)  # Increased timeout
         self.limiter = get_default_limiter()
+        self.encoding = tiktoken.get_encoding("cl100k_base") if HAS_TIKTOKEN else None
 
     def __call__(self, input: Documents) -> Embeddings:
         embeddings = []
@@ -48,17 +56,19 @@ class OllamaEmbeddingFunction(EmbeddingFunction):
             return response.json()["embedding"]
 
         for text in input:
-            # Truncate text to avoid 500 errors from Ollama on overly large inputs
-            # 3000 chars is very safe (~750-1000 tokens)
-            safe_text = text[:3000] if len(text) > 3000 else text
+            # Use proper tokenizer to safely maximize context window without triggering 500 errors
+            if self.encoding:
+                tokens = self.encoding.encode(text)
+                if len(tokens) > self.max_tokens:
+                    safe_text = self.encoding.decode(tokens[:self.max_tokens])
+                else:
+                    safe_text = text
+            else:
+                # Fallback to naive truncation if tiktoken is missing
+                safe_text = text[:3000] if len(text) > 3000 else text
             
-            try:
-                embedding = _get_embedding(safe_text)
-                embeddings.append(embedding)
-            except Exception as e:
-                error(f"Ollama embedding persistent error: {e}")
-                # Return zero vector on persistent error to maintain dimension consistency
-                embeddings.append([0.0] * 768)
+            embedding = _get_embedding(safe_text)
+            embeddings.append(embedding)
                 
         return embeddings
 

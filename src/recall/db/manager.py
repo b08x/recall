@@ -24,37 +24,65 @@ class PersistenceManager:
                        insights: Optional[SessionInsights] = None,
                        overwrite: bool = False):
         """Save a session, its analysis, and index its chunks for semantic search."""
-        # 1. Relational storage
-        self.sqlite.save_session(session)
-        if analysis:
-            self.sqlite.save_analysis(analysis)
-        if insights:
-            self.sqlite.save_insights(insights)
-
-        # 2. Vector storage
-        if overwrite:
-            debug(f"Overwrite: deleting existing vector chunks for {session.id}")
-            self.vector.delete_session(session.id)
-        elif self.vector.has_session(session.id):
-            debug(f"Session {session.id} already indexed in vector store, skipping.")
-            return
-
-        debug(f"Generating chunks and embeddings for session {session.id}...")
-        chunks = self.chunker.chunk_session(session)
-        if chunks:
-            # Create basic metadata for each chunk
-            metadata = []
-            for _ in chunks:
-                m = {
-                    "platform": session.source_tool,
-                    "project": session.project_name or "unknown",
-                    "timestamp": session.started_at.isoformat() if session.started_at else None
-                }
-                if analysis:
-                    m["topics"] = ", ".join(analysis.topics[:5])
-                metadata.append(m)
+        
+        # Use a single connection for the relational part of the transaction
+        conn = self.sqlite._get_connection()
+        try:
+            # 1. Relational storage (partial transaction)
+            # This saves the session with indexing_status='pending'
+            self.sqlite.save_session(session, conn=conn)
+            if analysis:
+                self.sqlite.save_analysis(analysis, conn=conn)
+            if insights:
+                self.sqlite.save_insights(insights, conn=conn)
             
-            self.vector.add_chunks(session.id, chunks, metadata)
+            # Commit the relational data first so we don't lose it if vector fails,
+            # but it stays marked as 'pending'.
+            conn.commit()
+            
+            # 2. Vector storage
+            if overwrite:
+                debug(f"Overwrite: deleting existing vector chunks for {session.id}")
+                self.vector.delete_session(session.id)
+            elif self.vector.has_session(session.id):
+                debug(f"Session {session.id} already indexed in vector store, skipping.")
+                self.sqlite.update_indexing_status(session.id, 'completed')
+                return
+
+            debug(f"Generating chunks and embeddings for session {session.id}...")
+            chunks = self.chunker.chunk_session(session)
+            if chunks:
+                # Create basic metadata for each chunk
+                metadata = []
+                for _ in chunks:
+                    m = {
+                        "platform": session.source_tool,
+                        "project": session.project_name or "unknown",
+                        "timestamp": session.started_at.isoformat() if session.started_at else None
+                    }
+                    if analysis:
+                        m["topics"] = ", ".join(analysis.topics[:5])
+                    metadata.append(m)
+                
+                try:
+                    self.vector.add_chunks(session.id, chunks, metadata)
+                    # If vector succeeds, mark as completed
+                    self.sqlite.update_indexing_status(session.id, 'completed')
+                    debug(f"Successfully persisted and indexed session {session.id}")
+                except Exception as ve:
+                    # If vector fails, mark as failed for reconciliation
+                    self.sqlite.update_indexing_status(session.id, 'failed')
+                    debug(f"Vector indexing failed for session {session.id}: {ve}")
+                    raise
+        except Exception as e:
+            # Only rollback if the initial relational save failed
+            try:
+                conn.rollback()
+            except:
+                pass
+            raise
+        finally:
+            conn.close()
 
     def persist_correlation(self, result: CorrelationResult):
         """Save synthesized correlation data."""

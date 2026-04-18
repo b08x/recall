@@ -6,33 +6,33 @@ Recall is a modern Python application designed for multi-platform session extrac
 
 - **Purpose**: Unified tool for capturing and correlating activity across multiple AI and developer platforms.
 - **Main Technologies**:
-  - **Python 3.14+**: Leverages modern Python features.
+  - **Python 3.12+**: Compatible with standard environments.
   - **uv**: Modern Python package and project manager.
   - **Rich**: Powers the terminal user interface (TUI) and dashboard.
   - **Pydantic / Pydantic-Settings**: Handles data modeling and decoupled configuration.
-  - **DSPy**: Powers the AI correlation and session analysis modules. Supports OpenRouter, OpenAI, Ollama, and Mistral.
+  - **DSPy**: Powers the AI correlation and session analysis modules with **Pydantic-enforced TypedPredictors**.
   - **Tenacity**: Provides robust exponential backoff retry logic for API interactions.
-  - **SQLite**: Used for session and message persistence, as well as local state discovery for certain providers (Hermes, OpenCode).
-  - **ChromaDB**: Vector database for semantic search and retrieval of session chunks.
-  - **Ollama**: Provides local embeddings via `embeddinggemma` for the vector store.
+  - **SQLite**: Relational storage for sessions and insights with **transactional tracking**.
+  - **ChromaDB**: Vector database for semantic search.
+  - **Ollama / tiktoken**: Local embeddings with **precise token-window management**.
 
 ## Architecture & Structure
 
 The project follows a standard `src`-layout for modern Python packages:
 
 - `src/recall/`: Core package directory.
-  - `core.py`: Main orchestration logic (`MultiSourceCorrelator`).
-  - `cli.py`: Command-line interface entry point.
+  - `core.py`: Main orchestration logic with **token estimation pre-flight checks**.
+  - `cli.py`: Command-line interface with **cost-aware user confirmations**.
   - `config.py`: Configuration management via `.env.local`.
   - `utils/`: Common utilities including `RateLimiter` and retry decorators.
-  - `models.py`: Unified dataclass and Pydantic models for sessions, messages, and insights.
-  - `tui.py`: Rich-based dashboard and progress visualization.
+  - `models.py`: Unified dataclass and Pydantic models.
+  - `tui.py`: Rich-based dashboard.
   - `logging.py`: Centralized debug logging system.
-  - `ai/`: DSPy modules, signatures, and contextual chunking logic. Includes `SessionInsightModule` for deep analysis.
-  - `db/`: Persistence layer.
-    - `manager.py`: Orchestrates SQL and Vector storage.
-    - `sqlite_store.py`: SQLite implementation for relational data (sessions, topics, insights).
-    - `vector_store.py`: ChromaDB implementation for semantic embeddings.
+  - `ai/`: DSPy modules and signatures using **TypedPredictor** for schema safety.
+  - `db/`: Persistence layer with **Atomic Dual-Writes**.
+    - `manager.py`: Orchestrates transactional SQL and Vector synchronization.
+    - `sqlite_store.py`: SQLite implementation with **auto-migration** and indexing status tracking.
+    - `vector_store.py`: ChromaDB implementation with **tiktoken** truncation.
   - `providers/`: Specialized extractors for Gemini, Claude Code, Hermes, OpenCode, Obsidian, and Git.
 
 ## Building and Running

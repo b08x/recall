@@ -19,7 +19,6 @@ class SQLiteStore:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
-
     def _init_db(self):
         """Initialize the database schema."""
         with self._get_connection() as conn:
@@ -36,7 +35,8 @@ class SQLiteStore:
                     message_count INTEGER DEFAULT 0,
                     git_branch TEXT,
                     source_tool TEXT DEFAULT 'unknown',
-                    metadata TEXT
+                    metadata TEXT,
+                    indexing_status TEXT DEFAULT 'pending'
                 );
 
                 CREATE TABLE IF NOT EXISTS messages (
@@ -115,15 +115,28 @@ class SQLiteStore:
                 );
             """)
 
-    def save_session(self, session: ParsedSession):
+            # Simple migration: Add indexing_status if it doesn't exist
+            cursor = conn.execute("PRAGMA table_info(sessions)")
+            columns = [row['name'] for row in cursor.fetchall()]
+            if 'indexing_status' not in columns:
+                conn.execute("ALTER TABLE sessions ADD COLUMN indexing_status TEXT DEFAULT 'pending'")
+                conn.commit()
+
+    def save_session(self, session: ParsedSession, conn: Optional[sqlite3.Connection] = None):
         """Save or update a session and its messages."""
-        with self._get_connection() as conn:
+        should_close = False
+        if conn is None:
+            conn = self._get_connection()
+            should_close = True
+        
+        try:
             # Save session
             conn.execute("""
                 INSERT OR REPLACE INTO sessions (
                     id, platform, project_name, project_path, summary, generated_title,
-                    started_at, ended_at, message_count, git_branch, source_tool, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    started_at, ended_at, message_count, git_branch, source_tool, metadata,
+                    indexing_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 session.id, session.source_tool, session.project_name, session.project_path,
                 json.dumps(session.summary) if session.summary else None,
@@ -131,7 +144,8 @@ class SQLiteStore:
                 session.started_at.isoformat() if session.started_at else None,
                 session.ended_at.isoformat() if session.ended_at else None,
                 session.message_count, session.git_branch, session.source_tool,
-                json.dumps({"claude_version": session.claude_version}) if session.claude_version else None
+                json.dumps({"claude_version": session.claude_version}) if session.claude_version else None,
+                'pending'
             ))
 
             # Save messages
@@ -153,10 +167,21 @@ class SQLiteStore:
                         INSERT OR REPLACE INTO tool_calls (id, message_id, name, input)
                         VALUES (?, ?, ?, ?)
                     """, (tc.id, msg.id, tc.name, json.dumps(tc.input)))
+            
+            if should_close:
+                conn.commit()
+        finally:
+            if should_close:
+                conn.close()
 
-    def save_analysis(self, analysis: SessionAnalysis):
+    def save_analysis(self, analysis: SessionAnalysis, conn: Optional[sqlite3.Connection] = None):
         """Save session topics, files, and actions."""
-        with self._get_connection() as conn:
+        should_close = False
+        if conn is None:
+            conn = self._get_connection()
+            should_close = True
+        
+        try:
             # Save base analysis
             conn.execute("""
                 INSERT OR REPLACE INTO session_analysis (session_id, key_actions)
@@ -178,10 +203,21 @@ class SQLiteStore:
                     INSERT OR IGNORE INTO session_files (session_id, file_id)
                     SELECT ?, id FROM file_paths WHERE path = ?
                 """, (analysis.session_id, path))
+            
+            if should_close:
+                conn.commit()
+        finally:
+            if should_close:
+                conn.close()
 
-    def save_insights(self, insights: SessionInsights):
+    def save_insights(self, insights: SessionInsights, conn: Optional[sqlite3.Connection] = None):
         """Save categorized insights for a session."""
-        with self._get_connection() as conn:
+        should_close = False
+        if conn is None:
+            conn = self._get_connection()
+            should_close = True
+        
+        try:
             # Delete existing insights for this session
             conn.execute("DELETE FROM session_insights WHERE session_id = ?", (insights.session_id,))
             
@@ -198,6 +234,12 @@ class SQLiteStore:
                     insights.primary_theme,
                     insights.confidence
                 ))
+            
+            if should_close:
+                conn.commit()
+        finally:
+            if should_close:
+                conn.close()
 
     def save_correlation(self, result: CorrelationResult):
         """Save cross-session synthesis result."""
@@ -223,6 +265,14 @@ class SQLiteStore:
                     INSERT OR IGNORE INTO correlation_sessions (correlation_id, session_id)
                     VALUES (?, ?)
                 """, (result.id, session_id))
+
+    def update_indexing_status(self, session_id: str, status: str):
+        """Update the vector indexing status of a session."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE sessions SET indexing_status = ? WHERE id = ?",
+                (status, session_id)
+            )
 
     def get_session(self, session_id: str) -> Optional[ParsedSession]:
         """Retrieve a full session with messages."""

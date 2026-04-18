@@ -69,13 +69,12 @@ if DSPY_AVAILABLE:
                 "key_actions": sorted(list(all_actions))
             }
 
-
     class SessionInsightModule(dspy.Module):
-        """Extract categorized insights from sessions using chain of thought."""
+        """Extract categorized insights from sessions using typed predictor."""
 
         def __init__(self, max_chunk_chars: int = 12000):
             super().__init__()
-            self.extract_insights = dspy.ChainOfThought(SessionInsightExtractor)
+            self.extract_insights = dspy.TypedPredictor(SessionInsightExtractor)
             self.chunker = ContextualChunker(max_chunk_chars=max_chunk_chars)
             self.limiter = get_default_limiter()
 
@@ -103,7 +102,9 @@ if DSPY_AVAILABLE:
                     )
                     if result:
                         if hasattr(result, 'insights'):
-                            all_insights.extend(result.insights)
+                            # result.insights is now a List[Insight] model instances
+                            # We want to return dicts to maintain backward compatibility with the rest of the app
+                            all_insights.extend([i.model_dump() for i in result.insights])
                         if hasattr(result, 'primary_theme'):
                             themes.append(result.primary_theme)
                         if hasattr(result, 'confidence'):
@@ -124,13 +125,15 @@ if DSPY_AVAILABLE:
         def __init__(self):
             super().__init__()
             self.correlate_commits = dspy.Predict(CommitSessionCorrelator)
-            self.synthesize = dspy.ChainOfThought(TimelineSynthesizer)
+            self.synthesize = dspy.TypedPredictor(TimelineSynthesizer)
             self.one_thing = dspy.ChainOfThought(OneThingGenerator)
             self.limiter = get_default_limiter()
 
         def forward(self, sessions: List[Dict], commits: List[Dict], file_changes: List[Dict]):
             # Stage 1: Synthesize timeline
             self.limiter.wait()
+            
+            # Use TypedPredictor which expects Pydantic models for TimelineSynthesizer
             timeline_result = self.synthesize(
                 sessions=sessions,
                 commits=commits,
