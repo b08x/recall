@@ -2,7 +2,11 @@ import sqlite3
 import json
 from datetime import datetime
 from typing import List, Dict, Optional, Any
-from recall.models import ParsedSession, ParsedMessage, ToolCall, ToolResult, SessionUsage, SessionAnalysis, CorrelationResult
+from recall.models import (
+    ParsedSession, ParsedMessage, ToolCall, ToolResult, 
+    SessionUsage, SessionAnalysis, CorrelationResult,
+    SessionInsight, SessionInsights
+)
 
 class SQLiteStore:
     """Handles persistence of sessions, messages, and analysis results in SQLite."""
@@ -67,6 +71,17 @@ class SQLiteStore:
                     session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
                     key_actions TEXT,
                     analyzed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS session_insights (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+                    category TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    importance REAL DEFAULT 0.5,
+                    primary_theme TEXT,
+                    confidence REAL,
+                    generated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
 
                 CREATE TABLE IF NOT EXISTS session_topics (
@@ -164,6 +179,26 @@ class SQLiteStore:
                     SELECT ?, id FROM file_paths WHERE path = ?
                 """, (analysis.session_id, path))
 
+    def save_insights(self, insights: SessionInsights):
+        """Save categorized insights for a session."""
+        with self._get_connection() as conn:
+            # Delete existing insights for this session
+            conn.execute("DELETE FROM session_insights WHERE session_id = ?", (insights.session_id,))
+            
+            for insight in insights.insights:
+                conn.execute("""
+                    INSERT INTO session_insights 
+                    (session_id, category, content, importance, primary_theme, confidence)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    insights.session_id, 
+                    insight.category, 
+                    insight.content, 
+                    insight.importance,
+                    insights.primary_theme,
+                    insights.confidence
+                ))
+
     def save_correlation(self, result: CorrelationResult):
         """Save cross-session synthesis result."""
         with self._get_connection() as conn:
@@ -238,4 +273,33 @@ class SQLiteStore:
                 files_touched=files,
                 key_actions=key_actions,
                 analyzed_at=analyzed_at
+            )
+
+    def get_insights(self, session_id: str) -> Optional[SessionInsights]:
+        """Retrieve saved insights for a session."""
+        with self._get_connection() as conn:
+            rows = conn.execute("""
+                SELECT category, content, importance, primary_theme, confidence, generated_at 
+                FROM session_insights 
+                WHERE session_id = ?
+            """, (session_id,)).fetchall()
+            
+            if not rows:
+                return None
+            
+            insights_list = [
+                SessionInsight(
+                    category=row['category'],
+                    content=row['content'],
+                    importance=row['importance']
+                )
+                for row in rows
+            ]
+            
+            return SessionInsights(
+                session_id=session_id,
+                insights=insights_list,
+                primary_theme=rows[0]['primary_theme'],
+                confidence=rows[0]['confidence'],
+                generated_at=datetime.fromisoformat(rows[0]['generated_at']) if isinstance(rows[0]['generated_at'], str) else rows[0]['generated_at']
             )

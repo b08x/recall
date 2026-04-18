@@ -7,6 +7,7 @@ except ImportError:
 from typing import List, Dict, Optional, Any
 from .signatures import (
     SessionTopicExtractor, 
+    SessionInsightExtractor,
     CommitSessionCorrelator, 
     TimelineSynthesizer, 
     OneThingGenerator
@@ -58,6 +59,45 @@ if DSPY_AVAILABLE:
             }
 
 
+    class SessionInsightModule(dspy.Module):
+        """Extract categorized insights from sessions using chain of thought."""
+
+        def __init__(self, max_chunk_chars: int = 12000):
+            super().__init__()
+            self.extract_insights = dspy.ChainOfThought(SessionInsightExtractor)
+            self.chunker = ContextualChunker(max_chunk_chars=max_chunk_chars)
+            self.limiter = get_default_limiter()
+
+        def forward(self, session: Any) -> Dict[str, Any]:
+            """Generate insights from session content."""
+            debug(f"Extracting insights for session {getattr(session, 'id', 'unknown')}")
+            chunks = self.chunker.chunk_session(session)
+            
+            all_insights = []
+            themes = []
+            confidences = []
+
+            for i, chunk in enumerate(chunks):
+                try:
+                    self.limiter.wait()
+                    result = self.extract_insights(session_content=chunk)
+                    if result:
+                        if hasattr(result, 'insights'):
+                            all_insights.extend(result.insights)
+                        if hasattr(result, 'primary_theme'):
+                            themes.append(result.primary_theme)
+                        if hasattr(result, 'confidence'):
+                            confidences.append(result.confidence)
+                except Exception as e:
+                    error(f"Error extracting insights from chunk {i+1}: {e}")
+
+            return {
+                "insights": all_insights,
+                "primary_theme": max(set(themes), key=themes.count) if themes else "General",
+                "confidence": sum(confidences) / len(confidences) if confidences else 0.0
+            }
+
+
     class CorrelationModule(dspy.Module):
         """Multi-stage correlation pipeline."""
 
@@ -95,4 +135,5 @@ if DSPY_AVAILABLE:
 
 else:
     class SessionAnalysisModule: pass
+    class SessionInsightModule: pass
     class CorrelationModule: pass

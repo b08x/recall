@@ -1,6 +1,6 @@
 from typing import List, Dict, Optional, Any
 from datetime import datetime
-from recall.models import ParsedSession, SessionAnalysis, CorrelationResult
+from recall.models import ParsedSession, SessionAnalysis, SessionInsights, CorrelationResult
 from recall.db.sqlite_store import SQLiteStore
 from recall.db.vector_store import VectorStore
 from recall.ai.chunking import ContextualChunker
@@ -18,12 +18,18 @@ class PersistenceManager:
         self.vector = VectorStore(persist_directory=vector_dir, ollama_host=ollama_host)
         self.chunker = ContextualChunker()
 
-    def persist_session(self, session: ParsedSession, analysis: Optional[SessionAnalysis] = None, overwrite: bool = False):
+    def persist_session(self, 
+                       session: ParsedSession, 
+                       analysis: Optional[SessionAnalysis] = None, 
+                       insights: Optional[SessionInsights] = None,
+                       overwrite: bool = False):
         """Save a session, its analysis, and index its chunks for semantic search."""
         # 1. Relational storage
         self.sqlite.save_session(session)
         if analysis:
             self.sqlite.save_analysis(analysis)
+        if insights:
+            self.sqlite.save_insights(insights)
 
         # 2. Vector storage
         if overwrite:
@@ -57,6 +63,10 @@ class PersistenceManager:
     def get_analysis(self, session_id: str) -> Optional[SessionAnalysis]:
         """Retrieve saved analysis for a session from relational store."""
         return self.sqlite.get_analysis(session_id)
+
+    def get_insights(self, session_id: str) -> Optional[SessionInsights]:
+        """Retrieve saved insights for a session from relational store."""
+        return self.sqlite.get_insights(session_id)
 
     def semantic_search(self, query: str, platform: Optional[str] = None) -> Dict[str, Any]:
         """Hybrid search: Find relevant chunks and return their session context."""

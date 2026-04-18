@@ -14,7 +14,17 @@ class Settings(BaseSettings):
     
     # DSPy Settings
     dspy_provider: str = Field(default="openrouter", description="DSPy provider (openrouter, openai, ollama, mistral)")
-    dspy_model: str = Field(default="openai/gpt-4o-mini", description="DSPy model identifier")
+    dspy_insights_provider: Optional[str] = Field(
+        default=None,
+        description="Specific provider for deep insight extraction",
+        validation_alias="insights_provider"
+    )
+    dspy_model: str = Field(default="openai/gpt-4o-mini", description="DSPy model identifier for general analysis")
+    dspy_insights_model: Optional[str] = Field(
+        default=None, 
+        description="Specific model for deep insight extraction",
+        validation_alias="insights_model"
+    )
     
     # Embedding Settings
     ollama_host: str = Field(default="http://tinybot:11434", description="Host for Ollama embedding service")

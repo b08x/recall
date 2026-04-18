@@ -39,7 +39,9 @@ def main():
     p_extract.add_argument("--platforms", help="Comma-separated platforms (gemini,hermes,claude,opencode,obsidian)")
     p_extract.add_argument("--analyze", action="store_true", help="Analyze session topics using DSPy")
     p_extract.add_argument("--overwrite", action="store_true", help="Overwrite existing analysis in the database")
-    p_extract.add_argument("--model", help="DSPy model identifier")
+    p_extract.add_argument("--model", help="DSPy model identifier for general analysis")
+    p_extract.add_argument("--insights-model", help="DSPy model identifier for deep insight extraction")
+    p_extract.add_argument("--insights-provider", help="DSPy provider for deep insight extraction")
     p_extract.add_argument("--output", help="Output JSON file")
     
     # Correlate command
@@ -84,7 +86,15 @@ def main():
 
     if args.command == "extract":
         platforms = args.platforms.split(",") if args.platforms else None
-        results = correlator.extract_all(args.days, platforms, analyze=args.analyze, overwrite=args.overwrite, model=args.model)
+        results = correlator.extract_all(
+            args.days, 
+            platforms, 
+            analyze=args.analyze, 
+            overwrite=args.overwrite, 
+            model=args.model,
+            insights_model=args.insights_model,
+            insights_provider=args.insights_provider
+        )
         
         output = {}
         for platform, items in results.items():

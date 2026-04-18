@@ -12,9 +12,9 @@ from recall.providers.claude_code import ClaudeCodeProvider
 from recall.providers.opencode import OpenCodeProvider
 from recall.providers.obsidian import ObsidianProvider
 from recall.providers.local_git import LocalGitProvider
-from recall.ai.modules import SessionAnalysisModule, CorrelationModule
+from recall.ai.modules import SessionAnalysisModule, SessionInsightModule, CorrelationModule
 from recall.db import PersistenceManager
-from recall.models import ParsedSession, ParsedNote, SessionAnalysis, CorrelationResult
+from recall.models import ParsedSession, ParsedNote, SessionAnalysis, SessionInsight, SessionInsights, CorrelationResult
 from recall.config import Settings
 from recall.logging import debug, info, error
 from recall.utils.limiter import RateLimiter, get_retry_decorator, rate_limited, set_default_limiter
@@ -60,6 +60,8 @@ class MultiSourceCorrelator:
                     analyze: bool = False,
                     overwrite: bool = False,
                     model: Optional[str] = None,
+                    insights_model: Optional[str] = None,
+                    insights_provider: Optional[str] = None,
                     callback: Optional[callable] = None) -> Dict[str, List[Any]]:
         """
         Extract sessions and notes from all platforms and persist them.
@@ -67,6 +69,11 @@ class MultiSourceCorrelator:
         debug(f"Starting extraction for last {days} days")
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         date_range = {'start': cutoff, 'end': datetime.now(timezone.utc)}
+        
+        # Determine models to use
+        analysis_model = model or self.dspy_model
+        insights_model = insights_model or self.settings.dspy_insights_model or analysis_model
+        insights_provider = insights_provider or self.settings.dspy_insights_provider or self.dspy_provider
         
         results = {}
         all_platforms = list(self.providers.keys()) + ["obsidian"]
@@ -93,33 +100,31 @@ class MultiSourceCorrelator:
             
             for i, session in enumerate(sessions):
                 analysis_obj = None
+                insight_obj = None
                 if analyze:
-                    # Check for existing analysis unless overwrite is True
+                    # Check for existing analysis/insights unless overwrite is True
                     existing_analysis = None
+                    existing_insights = None
                     if not overwrite:
                         existing_analysis = self.db.get_analysis(session.id)
+                        existing_insights = self.db.get_insights(session.id)
                     else:
                         debug(f"Overwrite enabled: forcing re-analysis for session {session.id}")
                     
                     if existing_analysis:
-                        debug(f"Found existing analysis for {session.id} (topics: {len(existing_analysis.topics)})")
-                        info(f"Re-using existing analysis for session {session.id}")
-                        if callback:
-                            callback(f"Re-using analysis for {platform} {i+1}/{len(sessions)}...", progress=0.5)
-                        
+                        debug(f"Found existing analysis for {session.id}")
                         session.summary = existing_analysis.topics
                         if session.summary:
                             session.generated_title = session.summary[0]
                         analysis_obj = existing_analysis
+                        insight_obj = existing_insights
                     else:
-                        if not overwrite:
-                            debug(f"No existing analysis found for {session.id}. Starting AI analysis...")
-                        
                         debug(f"Analyzing session {i+1}/{len(sessions)} (ID: {session.id})")
                         if callback:
                             callback(f"Analyzing {platform} {i+1}/{len(sessions)}...", progress=0.5)
                         
-                        analysis_data = self.analyze_session_topics(session, model=model)
+                        # 1. Topic/Activity Analysis
+                        analysis_data = self.analyze_session_topics(session, model=analysis_model)
                         session.summary = analysis_data.get("topics", [])
                         if session.summary:
                             session.generated_title = session.summary[0]
@@ -131,12 +136,22 @@ class MultiSourceCorrelator:
                             key_actions=analysis_data.get("key_actions", []),
                             analyzed_at=datetime.now(timezone.utc)
                         )
+
+                        # 2. Insight Extraction
+                        insight_data = self.analyze_session_insights(session, model=insights_model, provider=insights_provider)
+                        insight_obj = SessionInsights(
+                            session_id=session.id,
+                            insights=[SessionInsight(**i) for i in insight_data.get("insights", [])],
+                            primary_theme=insight_data.get("primary_theme", "General"),
+                            confidence=insight_data.get("confidence", 0.0),
+                            generated_at=datetime.now(timezone.utc)
+                        )
                 else:
                     debug(f"Skipping analysis for session {session.id} (analyze=False)")
                 
                 # Persist each session as it is processed
                 debug(f"Persisting session {session.id} to storage")
-                self.db.persist_session(session, analysis_obj, overwrite=overwrite)
+                self.db.persist_session(session, analysis_obj, insight_obj, overwrite=overwrite)
             
             results[platform] = sessions
         
@@ -264,12 +279,12 @@ class MultiSourceCorrelator:
         
         return sorted(timeline, key=lambda x: x.get("timestamp") or datetime.min.replace(tzinfo=timezone.utc))
 
-    def configure_dspy(self, model: Optional[str] = None):
+    def configure_dspy(self, model: Optional[str] = None, provider: Optional[str] = None):
         """Configure DSPy with specified language model."""
         if not DSPY_AVAILABLE:
             return False
         
-        provider = self.dspy_provider
+        provider = provider or self.dspy_provider
         model_id = model or self.dspy_model
         
         try:
@@ -323,6 +338,23 @@ class MultiSourceCorrelator:
         except Exception as e:
             error(f"Error in SessionAnalysisModule: {e}")
             return {"topics": [], "files_touched": [], "key_actions": []}
+
+    def analyze_session_insights(self, session: ParsedSession, model: Optional[str] = None, provider: Optional[str] = None) -> Dict[str, Any]:
+        """Use DSPy to extract categorized insights from a session."""
+        debug(f"Configuring DSPy for session insights (model: {model or 'default'})")
+        if not DSPY_AVAILABLE or not self.configure_dspy(model, provider):
+            return {"insights": [], "primary_theme": "General", "confidence": 0.0}
+        
+        debug("Running SessionInsightModule")
+        analyzer = SessionInsightModule()
+        try:
+            self.limiter.wait()
+            result = analyzer(session)
+            debug(f"SessionInsightModule result: {result}")
+            return result
+        except Exception as e:
+            error(f"Error in SessionInsightModule: {e}")
+            return {"insights": [], "primary_theme": "General", "confidence": 0.0}
 
     def correlate_with_dspy(self, timeline: List[Dict], model: Optional[str] = None) -> Dict:
         """Use DSPy to generate correlated narrative and next actions."""

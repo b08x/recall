@@ -20,6 +20,19 @@ if DSPY_AVAILABLE:
         key_actions: List[str] = dspy.OutputField(desc="Key actions taken (commits, edits, tests run, bugs fixed)")
 
 
+    class SessionInsightExtractor(dspy.Signature):
+        """Extract categorized insights from session content.
+        
+        Analyzes session messages to find deeper insights like architectural 
+        decisions, technical debt, blockers, or process improvements.
+        """
+        
+        session_content: str = dspy.InputField(desc="Combined text content from session messages")
+        insights: List[Dict[str, Any]] = dspy.OutputField(desc="List of objects with keys: category, content, importance (0.0-1.0)")
+        primary_theme: str = dspy.OutputField(desc="The core theme of this specific insight set")
+        confidence: float = dspy.OutputField(desc="Overall confidence in the insight extraction (0.0-1.0)")
+
+
     class CommitSessionCorrelator(dspy.Signature):
         """Correlate a git commit with the most relevant session(s).
         
@@ -67,6 +80,7 @@ if DSPY_AVAILABLE:
         reasoning: str = dspy.OutputField(desc="Why this action is highest leverage (1-2 sentences)")
 else:
     class SessionTopicExtractor: pass
+    class SessionInsightExtractor: pass
     class CommitSessionCorrelator: pass
     class TimelineSynthesizer: pass
     class OneThingGenerator: pass

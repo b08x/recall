@@ -125,6 +125,28 @@ class SessionAnalysis:
 
 
 @dataclass
+class SessionInsight:
+    """A single categorized insight from a session."""
+    category: str  # e.g., 'technical', 'procedural', 'strategic', 'blocker'
+    content: str
+    importance: float = 0.5  # 0.0 to 1.0
+
+
+@dataclass
+class SessionInsights:
+    """Container for multiple insights and meta-analysis of a session."""
+    session_id: str
+    insights: List[SessionInsight]
+    primary_theme: str
+    confidence: float = 0.0
+    generated_at: datetime = None
+
+    def __post_init__(self):
+        if self.insights is None:
+            self.insights = []
+
+
+@dataclass
 class CorrelationResult:
     """Synthesized narrative across multiple sessions/sources."""
     id: str  # UUID or timestamp-based
