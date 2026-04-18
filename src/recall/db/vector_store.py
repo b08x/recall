@@ -15,33 +15,44 @@ except ImportError:
     class Documents: pass
     class Embeddings: pass
 
+import time
+
 class OllamaEmbeddingFunction(EmbeddingFunction):
     """Custom embedding function for Ollama's embeddinggemma model."""
     
     def __init__(self, host: str = "http://tinybot:11434", model: str = "embeddinggemma"):
         self.host = host
         self.model = model
-        self.client = httpx.Client(timeout=30.0)
+        self.client = httpx.Client(timeout=60.0)  # Increased timeout
 
     def __call__(self, input: Documents) -> Embeddings:
         embeddings = []
         for text in input:
-            try:
-                # Truncate text to avoid 500 errors from Ollama on overly large inputs
-                # 6000 chars is a safe limit for most embedding models
-                safe_text = text[:6000] if len(text) > 6000 else text
-                
-                response = self.client.post(
-                    f"{self.host}/api/embeddings",
-                    json={"model": self.model, "prompt": safe_text}
-                )
-                response.raise_for_status()
-                data = response.json()
-                embeddings.append(data["embedding"])
-            except Exception as e:
-                error(f"Ollama embedding error: {e}")
-                # Return zero vector on error to maintain dimension consistency
+            # Truncate text to avoid 500 errors from Ollama on overly large inputs
+            # 3000 chars is very safe (~750-1000 tokens)
+            safe_text = text[:3000] if len(text) > 3000 else text
+            
+            success = False
+            for attempt in range(3):
+                try:
+                    response = self.client.post(
+                        f"{self.host}/api/embeddings",
+                        json={"model": self.model, "prompt": safe_text}
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    embeddings.append(data["embedding"])
+                    success = True
+                    break
+                except Exception as e:
+                    error(f"Ollama embedding error (attempt {attempt+1}/3): {e}")
+                    if attempt < 2:
+                        time.sleep(1 * (attempt + 1))  # Exponential backoff
+            
+            if not success:
+                # Return zero vector on persistent error to maintain dimension consistency
                 embeddings.append([0.0] * 768)
+                
         return embeddings
 
     def name(self) -> str:

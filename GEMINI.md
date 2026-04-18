@@ -10,8 +10,10 @@ Recall is a modern Python application designed for multi-platform session extrac
   - **uv**: Modern Python package and project manager.
   - **Rich**: Powers the terminal user interface (TUI) and dashboard.
   - **Pydantic / Pydantic-Settings**: Handles data modeling and decoupled configuration.
-  - **DSPy**: Powers the AI correlation and session analysis modules.
-  - **SQLite**: Used for local state discovery for certain providers (Hermes, OpenCode).
+  - **DSPy**: Powers the AI correlation and session analysis modules. Supports OpenRouter, OpenAI, Ollama, and Mistral.
+  - **SQLite**: Used for session and message persistence, as well as local state discovery for certain providers (Hermes, OpenCode).
+  - **ChromaDB**: Vector database for semantic search and retrieval of session chunks.
+  - **Ollama**: Provides local embeddings via `embeddinggemma` for the vector store.
 
 ## Architecture & Structure
 
@@ -25,6 +27,10 @@ The project follows a standard `src`-layout for modern Python packages:
   - `tui.py`: Rich-based dashboard and progress visualization.
   - `logging.py`: Centralized debug logging system.
   - `ai/`: DSPy modules, signatures, and contextual chunking logic.
+  - `db/`: Persistence layer.
+    - `manager.py`: Orchestrates SQL and Vector storage.
+    - `sqlite_store.py`: SQLite implementation for relational data.
+    - `vector_store.py`: ChromaDB implementation for semantic embeddings.
   - `providers/`: Specialized extractors for Gemini, Claude Code, Hermes, OpenCode, Obsidian, and Git.
 
 ## Building and Running
@@ -39,7 +45,10 @@ uv sync
 Run the application via the `uv` entrypoint:
 ```bash
 # Standard CLI
-uv run recall extract --days 3
+uv run recall extract --days 3 --analyze
+
+# Semantic Search
+uv run recall search "authentication"
 
 # Rich TUI Dashboard
 uv run recall --tui correlate --github-repo owner/repo

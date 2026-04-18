@@ -5,11 +5,12 @@ Recall is a multi-platform session extraction and correlation tool. It gathers c
 ## Features
 
 - **Multi-Source Extraction**: Seamlessly pull sessions from Gemini CLI, Claude Code, Hermes Agent, and more.
+- **Semantic Search**: Leverage ChromaDB and Ollama (`embeddinggemma`) to find sessions based on meaning, not just keywords.
+- **Persistent Data Layer**: Automatic storage of all sessions, messages, and AI-driven analyses in a local SQLite database.
 - **Git Correlation**: Match AI sessions with local and remote Git commits to see code changes in context.
 - **Obsidian Integration**: Include relevant notes from your personal knowledge base.
-- **AI Synthesis**: Uses [DSPy](https://github.com/stanfordnlp/dspy) to generate narratives and identify next actions.
+- **AI Synthesis**: Uses [DSPy](https://github.com/stanfordnlp/dspy) to generate narratives and identify next actions (supports Mistral, OpenAI, Ollama).
 - **Rich TUI**: A beautiful dashboard for monitoring extraction and correlation.
-- **Decoupled Config**: Easily manage API keys and paths via `.env.local`.
 
 ## Installation
 
@@ -23,6 +24,8 @@ cd recall
 # Install dependencies
 uv sync
 ```
+
+*Note: ChromaDB and Ollama are required for semantic search features.*
 
 ## Configuration
 
@@ -40,15 +43,20 @@ cp .env.local.example .env.local
 Run extraction and correlation with a live dashboard:
 
 ```bash
-uv run recall --tui extract --days 3
+uv run recall --tui extract --days 3 --analyze
 uv run recall --tui correlate --days 7 --github-repo owner/repo
 ```
 
 ### CLI Commands
 
-Extract sessions as JSON:
+Extract sessions and persist them:
 ```bash
-uv run recall extract --days 7 --platforms gemini,claude
+uv run recall extract --days 7 --platforms gemini,claude --analyze
+```
+
+Semantic search across all saved sessions:
+```bash
+uv run recall search "how did I fix that typescript error?"
 ```
 
 Correlate and print summary:
@@ -56,14 +64,10 @@ Correlate and print summary:
 uv run recall correlate --days 14
 ```
 
-Search across all sessions:
-```bash
-uv run recall search "authentication"
-```
-
 ## Project Structure
 
 - `src/recall/core.py`: The main orchestration engine.
+- `src/recall/db/`: Persistence layer (SQLite + ChromaDB).
 - `src/recall/tui.py`: Rich-based TUI implementation.
 - `src/recall/config.py`: Pydantic-settings configuration.
 - `src/recall/providers/`: Specialized extractors for different platforms.
