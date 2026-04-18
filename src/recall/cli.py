@@ -49,15 +49,22 @@ def main():
     p_correlate.add_argument("--output", help="Output JSON file")
     
     # Search command
-    p_search = sub.add_parser("search", help="Search sessions by topic")
+    p_search = sub.add_parser("search", help="Semantic search over saved sessions")
     p_search.add_argument("query", help="Search query")
-    p_search.add_argument("--days", type=int, default=30)
-    p_search.add_argument("--platforms", help="Comma-separated platforms")
+    p_search.add_argument("--limit", type=int, default=5, help="Number of results")
+    p_search.add_argument("--platform", help="Filter by platform (gemini, claude, etc.)")
     
     args = parser.parse_args()
     
     settings = Settings()
     correlator = MultiSourceCorrelator(settings=settings)
+
+    # Import rich components for search display
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich.markdown import Markdown
+    console = Console()
     
     if args.tui:
         from recall.tui import RecallTUI
@@ -122,34 +129,52 @@ def main():
             print(f"\n✓ Saved to {args.output}")
             
     elif args.command == "search":
-        platforms = args.platforms.split(",") if args.platforms else None
-        sessions = correlator.extract_all(args.days, platforms)
+        console.print(f"\n[bold blue]Searching for:[/bold blue] [italic]\"{args.query}\"[/italic]\n")
         
-        results = []
-        query_lower = args.query.lower()
+        results = correlator.db.semantic_search(
+            query=args.query, 
+            platform=args.platform
+        )
         
-        for platform, platform_sessions in sessions.items():
-            for session in platform_sessions:
-                if not hasattr(session, 'messages'): continue
-                
-                title_match = hasattr(session, 'generated_title') and session.generated_title and query_lower in session.generated_title.lower()
-                content_match = any(
-                    query_lower in m.content.lower() 
-                    for m in session.messages
-                )
-                
-                if title_match or content_match:
-                    results.append({
-                        "platform": platform,
-                        "session_id": session.id,
-                        "title": getattr(session, 'generated_title', "Untitled") or "Untitled",
-                        "started_at": session.started_at.isoformat() if session.started_at else None,
-                        "message_count": getattr(session, 'message_count', 0)
-                    })
+        if not results or not results.get('documents') or not results['documents'][0]:
+            console.print("[yellow]No semantic matches found.[/yellow]")
+            sys.exit(0)
+            
+        documents = results['documents'][0]
+        metadatas = results['metadatas'][0]
+        distances = results['distances'][0] if 'distances' in results else [0.0] * len(documents)
         
-        print(f"\n Found {len(results)} matching sessions")
-        for r in results[:20]:
-            print(f"  [{r['platform']}] {r['title'][:50]} ({r['message_count']} msgs)")
+        table = Table(title="Semantic Search Results", box=None, show_header=True, header_style="bold magenta")
+        table.add_column("Score", justify="right", style="cyan")
+        table.add_column("Platform", style="green")
+        table.add_column("Project", style="blue")
+        table.add_column("Preview", ratio=1)
+        
+        for doc, meta, dist in zip(documents, metadatas, distances):
+            # cosine distance: 0.0 is perfect, 1.0 is unrelated
+            score = f"{max(0, 1 - dist):.2f}"
+            
+            # Preview cleaning
+            preview = doc.split("\n", 1)[-1].strip()[:150].replace("\n", " ") + "..."
+            
+            table.add_row(
+                score,
+                meta.get("platform", "unknown"),
+                meta.get("project", "unknown"),
+                preview
+            )
+            
+        console.print(table)
+        
+        if documents:
+            console.print("\n[bold green]Top Match Context:[/bold green]")
+            top_meta = metadatas[0]
+            console.print(Panel(
+                Markdown(documents[0]),
+                title=f"Session: {top_meta.get('session_id', 'unknown')}",
+                subtitle=f"Topics: {top_meta.get('topics', 'None')}",
+                border_style="bright_blue"
+            ))
 
 if __name__ == "__main__":
     main()

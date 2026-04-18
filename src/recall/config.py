@@ -9,16 +9,23 @@ class Settings(BaseSettings):
     # Paths
     notebook_path: str = Field(default="~/Notebook", description="Path to Obsidian notebook")
     workspace_path: str = Field(default="~/Workspace", description="Path to code workspace")
+    db_path: str = Field(default="recall.db", description="Path to SQLite database")
+    vector_db_dir: str = Field(default="./chroma_db", description="Directory for ChromaDB storage")
     
     # DSPy Settings
-    dspy_provider: str = Field(default="openrouter", description="DSPy provider (openrouter, openai, ollama)")
+    dspy_provider: str = Field(default="openrouter", description="DSPy provider (openrouter, openai, ollama, mistral)")
     dspy_model: str = Field(default="openai/gpt-4o-mini", description="DSPy model identifier")
+    
+    # Embedding Settings
+    ollama_host: str = Field(default="http://tinybot:11434", description="Host for Ollama embedding service")
+    embedding_model: str = Field(default="embeddinggemma", description="Ollama model for embeddings")
     
     # API Keys
     openrouter_api_key: Optional[SecretStr] = None
     openai_api_key: Optional[SecretStr] = None
     anthropic_api_key: Optional[SecretStr] = None
     gemini_api_key: Optional[SecretStr] = None
+    mistral_api_key: Optional[SecretStr] = None
     
     # Platform specific
     github_token: Optional[SecretStr] = None

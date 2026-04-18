@@ -1,0 +1,16 @@
+.venv/
+uv.lock
+.env.local
+.gitignore
+.git/
+.env.local.example
+**/__pycache__/*
+
+.ck/
+.ckignore
+graphify-out/
+
+chroma_db/
+recall.db
+
+recall.log

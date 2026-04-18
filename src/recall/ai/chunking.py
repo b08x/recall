@@ -31,16 +31,34 @@ class ContextualChunker:
                 if msg.timestamp - last_timestamp > self.time_gap_threshold:
                     time_split = True
             
-            # 2. Length Boundary Check (only split on User messages to keep context)
+            # 2. Length Boundary Check
+            # We split if we exceed max_chunk_chars. 
+            # We prefer splitting on User messages, but if a single message is huge, we must split.
             length_split = False
-            if current_length + msg_len > self.max_chunk_chars and msg.type == 'user':
-                length_split = True
+            if current_length + msg_len > self.max_chunk_chars:
+                if msg.type == 'user' or current_length > self.max_chunk_chars * 0.8:
+                    length_split = True
 
             # If we need to split, save the current chunk
             if (time_split or length_split) and current_messages:
                 chunks.append("\n".join(current_messages))
                 current_messages = []
                 current_length = 0
+
+            # If the single message is STILL larger than max_chunk_chars on its own,
+            # we must truncate or sub-chunk it to avoid downstream errors.
+            if msg_len > self.max_chunk_chars:
+                # If we have current_messages, flush them first
+                if current_messages:
+                    chunks.append("\n".join(current_messages))
+                    current_messages = []
+                    current_length = 0
+                
+                # Sub-chunk the giant message
+                for i in range(0, msg_len, self.max_chunk_chars):
+                    sub_text = msg_text[i:i + self.max_chunk_chars]
+                    chunks.append(f"[TRUNCATED_PART_{i//self.max_chunk_chars}] {sub_text}")
+                continue
 
             current_messages.append(msg_text)
             current_length += msg_len

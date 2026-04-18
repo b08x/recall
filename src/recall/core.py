@@ -13,6 +13,8 @@ from recall.providers.opencode import OpenCodeProvider
 from recall.providers.obsidian import ObsidianProvider
 from recall.providers.local_git import LocalGitProvider
 from recall.ai.modules import SessionAnalysisModule, CorrelationModule
+from recall.db import PersistenceManager
+from recall.models import ParsedSession, ParsedNote, SessionAnalysis, CorrelationResult
 from recall.config import Settings
 from recall.logging import debug, info, error
 
@@ -37,6 +39,13 @@ class MultiSourceCorrelator:
         self.obsidian = ObsidianProvider(str(self.settings.resolved_notebook_path))
         self.local_git = LocalGitProvider(str(self.settings.resolved_workspace_path))
         
+        # Persistence Layer
+        self.db = PersistenceManager(
+            db_path=self.settings.db_path,
+            vector_dir=self.settings.vector_db_dir,
+            ollama_host=self.settings.ollama_host
+        )
+        
         # DSPy configuration from settings
         self.dspy_provider = self.settings.dspy_provider
         self.dspy_model = self.settings.dspy_model
@@ -47,14 +56,7 @@ class MultiSourceCorrelator:
                     model: Optional[str] = None,
                     callback: Optional[callable] = None) -> Dict[str, List[Any]]:
         """
-        Extract sessions and notes from all platforms.
-        
-        Args:
-            days: Number of days to look back.
-            platforms: List of platforms to extract from.
-            analyze: Whether to analyze session topics.
-            model: Optional model override for analysis.
-            callback: Optional callback for progress updates (e.g., for TUI).
+        Extract sessions and notes from all platforms and persist them.
         """
         debug(f"Starting extraction for last {days} days")
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
@@ -83,19 +85,37 @@ class MultiSourceCorrelator:
             sessions = provider.extract(date_range)
             debug(f"Extracted {len(sessions)} sessions from {platform}")
             
-            if analyze and sessions:
-                debug(f"Analyzing {len(sessions)} sessions for {platform}")
-                if callback:
-                    callback(f"Analyzing {platform} sessions...", progress=0.5)
-                for i, session in enumerate(sessions):
+            for i, session in enumerate(sessions):
+                analysis_obj = None
+                if analyze:
                     debug(f"Analyzing session {i+1}/{len(sessions)} (ID: {session.id})")
-                    analysis = self.analyze_session_topics(session, model=model)
-                    session.summary = analysis.get("topics", [])
-                    if analysis.get("topics"):
-                        session.generated_title = analysis["topics"][0]
-                    debug(f"Analysis complete for session {session.id}: {session.summary}")
+                    if callback:
+                        callback(f"Analyzing {platform} {i+1}/{len(sessions)}...", progress=0.5)
+                    
+                    analysis_data = self.analyze_session_topics(session, model=model)
+                    session.summary = analysis_data.get("topics", [])
+                    if session.summary:
+                        session.generated_title = session.summary[0]
+                    
+                    analysis_obj = SessionAnalysis(
+                        session_id=session.id,
+                        topics=analysis_data.get("topics", []),
+                        files_touched=analysis_data.get("files_touched", []),
+                        key_actions=analysis_data.get("key_actions", []),
+                        analyzed_at=datetime.now(timezone.utc)
+                    )
+                
+                # Persist each session as it is processed
+                debug(f"Persisting session {session.id} to storage")
+                self.db.persist_session(session, analysis_obj)
             
             results[platform] = sessions
+        
+        debug("Extraction all complete")
+        if callback:
+            callback("Extraction complete.", progress=1.0)
+            
+        return results
         
         debug("Extraction all complete")
         if callback:
@@ -222,6 +242,11 @@ class MultiSourceCorrelator:
                 if not api_key:
                     return False
                 lm = dspy.LM(model_id, api_key=api_key.get_secret_value())
+            elif provider == 'mistral':
+                api_key = self.settings.mistral_api_key
+                if not api_key:
+                    return False
+                lm = dspy.LM(f"mistral/{model_id}", api_key=api_key.get_secret_value())
             elif provider == 'ollama':
                 _, model_name = model_id.split("/", 1) if "/" in model_id else ("", model_id)
                 lm = dspy.LM(f"ollama_chat/{model_name}")

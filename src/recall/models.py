@@ -104,3 +104,44 @@ class ParsedSession:
             self.messages = []
         if self.usage is None:
             self.usage = SessionUsage()
+
+
+@dataclass
+class SessionAnalysis:
+    """Structured analysis for a single session."""
+    session_id: str
+    topics: List[str]
+    files_touched: List[str]
+    key_actions: List[str]
+    analyzed_at: datetime = None
+
+    def __post_init__(self):
+        if self.topics is None:
+            self.topics = []
+        if self.files_touched is None:
+            self.files_touched = []
+        if self.key_actions is None:
+            self.key_actions = []
+
+
+@dataclass
+class CorrelationResult:
+    """Synthesized narrative across multiple sessions/sources."""
+    id: str  # UUID or timestamp-based
+    start_date: datetime
+    end_date: datetime
+    narrative: str
+    workstreams: List[str]
+    next_actions: List[str]
+    one_thing: str
+    one_thing_reasoning: str
+    session_ids: List[str]  # References to sessions used in this synthesis
+    created_at: datetime = None
+
+    def __post_init__(self):
+        if self.workstreams is None:
+            self.workstreams = []
+        if self.next_actions is None:
+            self.next_actions = []
+        if self.session_ids is None:
+            self.session_ids = []

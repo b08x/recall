@@ -57,3 +57,12 @@ Manage paths and API keys in `.env.local`. See `.env.local.example` for the avai
 - **Logging**: Use the centralized `recall.logging` module (`debug`, `info`, `error`) to ensure logs are captured both in the log file and the TUI dashboard.
 - **AI Logic**: All LLM interactions should be encapsulated within DSPy modules in `src/recall/ai/`.
 - **Validation**: After modifying core logic, verify both standard CLI output and TUI rendering integrity.
+
+## graphify
+
+This project has a graphify knowledge graph at graphify-out/.
+
+Rules:
+- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
+- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
+- After modifying code files in this session, run `graphify update .` to keep the graph current (AST-only, no API cost)
