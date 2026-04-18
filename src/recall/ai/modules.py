@@ -25,7 +25,10 @@ if DSPY_AVAILABLE:
         def __init__(self, max_chunk_chars: int = 8000):
             super().__init__()
             self.extract_topics = dspy.ChainOfThought(SessionTopicExtractor)
-            self.chunker = ContextualChunker(max_chunk_chars=max_chunk_chars)
+            self.chunker = ContextualChunker(
+                max_chunk_chars=max_chunk_chars,
+                max_tool_result_chars=max_chunk_chars // 2
+            )
             self.limiter = get_default_limiter()
 
         def forward(self, session: Any) -> Dict[str, Any]:
@@ -73,10 +76,13 @@ if DSPY_AVAILABLE:
     class SessionInsightModule(dspy.Module):
         """Extract categorized insights from sessions using typed predictor."""
 
-        def __init__(self, max_chunk_chars: int = 12000):
+        def __init__(self, max_chunk_chars: int = 8000):
             super().__init__()
-            self.extract_insights = dspy.Predict(SessionInsightExtractor)
-            self.chunker = ContextualChunker(max_chunk_chars=max_chunk_chars)
+            self.extract_insights = dspy.ChainOfThought(SessionInsightExtractor)
+            self.chunker = ContextualChunker(
+                max_chunk_chars=max_chunk_chars,
+                max_tool_result_chars=max_chunk_chars // 2
+            )
             self.limiter = get_default_limiter()
 
         def forward(self, session: Any) -> Dict[str, Any]:
@@ -90,11 +96,14 @@ if DSPY_AVAILABLE:
             metadata = f"Platform: {platform} | Project: {project} | Date: {started}"
             
             chunks = self.chunker.chunk_session(session)
+            debug(f"Session split into {len(chunks)} chunks for insight extraction")
+            
             all_insights = []
             themes = []
             confidences = []
 
             for i, chunk in enumerate(chunks):
+                debug(f"Processing chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
                 try:
                     self.limiter.wait()
                     result = self.extract_insights(
@@ -105,8 +114,13 @@ if DSPY_AVAILABLE:
                         if hasattr(result, 'insights'):
                             # result.insights is now a List[Insight] model instances
                             # We want to return dicts to maintain backward compatibility with the rest of the app
-                            all_insights.extend([i.model_dump() for i in result.insights])
-                        if hasattr(result, 'primary_theme'):
+                            # Filter out false positive "empty" blockers if we already have or will have real insights
+                            valid_insights = [
+                                i.model_dump() for i in result.insights 
+                                if not (i.category == "BLOCKER" and "empty" in i.content.lower() and ("transcript" in i.content.lower() or "input" in i.content.lower()))
+                            ]
+                            all_insights.extend(valid_insights)
+                        if hasattr(result, 'primary_theme') and "absence" not in str(result.primary_theme).lower():
                             themes.append(result.primary_theme)
                         if hasattr(result, 'confidence'):
                             confidences.append(result.confidence)

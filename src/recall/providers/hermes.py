@@ -94,7 +94,8 @@ class HermesProvider(BaseProvider):
             assistant_count = 0
             tool_count = 0
 
-            for row in message_rows:
+            for row_raw in message_rows:
+                row = dict(row_raw)
                 role = row["role"]
 
                 # Handle tool results - attach to previous assistant
@@ -114,6 +115,20 @@ class HermesProvider(BaseProvider):
 
                 msg_type = "assistant" if role == "assistant" else "user"
 
+                # Extract tool calls (if any)
+                tool_calls = []
+                if msg_type == "assistant" and row.get("tool_calls"):
+                    try:
+                        tc_data_list = json.loads(row["tool_calls"])
+                        for tc_data in tc_data_list:
+                            tool_calls.append(ToolCall(
+                                id=tc_data.get("id", ""),
+                                name=tc_data.get("function", {}).get("name") or tc_data.get("name", ""),
+                                input=tc_data.get("function", {}).get("arguments") or tc_data.get("args") or {}
+                            ))
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
                 # Only add message if it has meaningful content
                 if row["content"] or row["reasoning"] or tool_calls:
                     if msg_type == "user":
@@ -122,6 +137,14 @@ class HermesProvider(BaseProvider):
                         assistant_count += 1
                     
                     tool_count += len(tool_calls)
+
+                    # Get timestamp if available
+                    timestamp = None
+                    if row.get("timestamp"):
+                        try:
+                            timestamp = datetime.fromtimestamp(row["timestamp"], tz=timezone.utc)
+                        except (ValueError, TypeError):
+                            pass
 
                     messages.append(ParsedMessage(
                         id=f"hermes-{row['id']}",
@@ -216,6 +239,7 @@ class HermesProvider(BaseProvider):
 
                 content = msg_data.get("content") or ""
                 thinking = msg_data.get("reasoning")
+                msg_type = "assistant" if role == "assistant" else "user"
 
                 # Extract tool calls
                 tool_calls = []

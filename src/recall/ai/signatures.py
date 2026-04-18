@@ -19,24 +19,32 @@ if DSPY_AVAILABLE:
         importance: float = Field(description="Importance score between 0.0 and 1.0", ge=0.0, le=1.0)
 
     class SessionTopicExtractor(dspy.Signature):
-        """Extract primary topics and activities from session content.
+        """Extract primary topics and activities from a session transcript.
+        
+        CRITICAL: Focus ONLY on the user's actual work, decisions, and code changes 
+        described in the transcript. Ignore the internal structure or prompt 
+        definitions of the 'recall' application itself.
         
         Identifies the core areas of work, modified files, and kinetic actions.
         Differentiates between 'thinking' and 'doing' based on tool usage and output.
         """
         
-        session_content: str = dspy.InputField(desc="Combined text content from session messages")
+        session_content: str = dspy.InputField(desc="Transcript of the user session, including thoughts and tool results")
         context_metadata: str = dspy.InputField(desc="Platform, project, and temporal context")
-        topics: List[str] = dspy.OutputField(desc="List of 3-5 main topics/activities, ranked by importance")
+        topics: List[str] = dspy.OutputField(desc="List of 3-5 main topics/activities (e.g. 'Implementing auth', 'Debugging regex')")
         files_touched: List[str] = dspy.OutputField(desc="File paths actually modified or deeply analyzed")
         key_actions: List[str] = dspy.OutputField(desc="Key kinetic actions (commits, tests run, specific fixes)")
 
 
     class SessionInsightExtractor(dspy.Signature):
-        """Extract categorized insights from session content.
+        """Extract categorized insights from a session transcript.
         
-        Identifies deep patterns including architecture decisions, workflow changes,
-        strategic shifts, and blockers.
+        CRITICAL: Analyze conversation, tool outputs, and internal thoughts to identify 
+        architecture decisions, workflow changes, and strategic shifts.
+        TECHNICAL WORK IS SUBSTANTIVE: If the transcript shows tool executions, code 
+        modifications, or reasoning blocks, it IS a substantive interaction, even if 
+        direct user-assistant chatter is minimal.
+        Ignore the structure of this 'recall' tool; focus on the USER'S work.
         """
         
         session_content: str = dspy.InputField(desc="Combined text content from session messages")
