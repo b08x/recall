@@ -167,3 +167,59 @@ class CorrelationResult:
             self.next_actions = []
         if self.session_ids is None:
             self.session_ids = []
+
+
+# Context Sources Models
+
+@dataclass
+class ContextMatch:
+    """A piece of relevant context found by a ContextSource."""
+    source_type: str  # e.g., "obsidian", "git", "slack"
+    content: str
+    relevance_score: float  # 0.0 to 1.0
+    match_reasons: List[str]  # e.g., ["semantic_similarity", "file_overlap"]
+    metadata: Dict[str, Any] = None  # Source-specific metadata
+
+    def __post_init__(self):
+        if self.match_reasons is None:
+            self.match_reasons = []
+        if self.metadata is None:
+            self.metadata = {}
+
+
+@dataclass
+class ContextualInsight(SessionInsight):
+    """Enhanced insight with supporting context."""
+    supporting_context: List[ContextMatch] = None
+    context_sources_used: List[str] = None
+    enhancement_confidence: float = 0.0
+
+    def __post_init__(self):
+        if self.supporting_context is None:
+            self.supporting_context = []
+        if self.context_sources_used is None:
+            self.context_sources_used = []
+
+
+@dataclass
+class EnhancedSessionInsights:
+    """SessionInsights enhanced with contextual information."""
+    session_id: str
+    base_insights: SessionInsights  # Original insights before enhancement
+    contextual_insights: List[ContextualInsight]
+    knowledge_gaps_filled: List[str]  # Topics that got context support
+    suggested_references: List[ContextMatch]  # Additional relevant materials
+    enhancement_metadata: Dict[str, Any] = None  # Processing stats, sources used
+    enhanced_at: datetime = None
+
+    def __post_init__(self):
+        if self.contextual_insights is None:
+            self.contextual_insights = []
+        if self.knowledge_gaps_filled is None:
+            self.knowledge_gaps_filled = []
+        if self.suggested_references is None:
+            self.suggested_references = []
+        if self.enhancement_metadata is None:
+            self.enhancement_metadata = {}
+        if self.enhanced_at is None:
+            self.enhanced_at = datetime.now()

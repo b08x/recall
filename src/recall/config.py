@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 from pydantic import SecretStr, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
@@ -49,7 +49,14 @@ class Settings(BaseSettings):
     requests_per_minute: int = Field(default=20, description="Conservative rate limit (requests per minute)")
     max_workers: int = Field(default=10, description="Maximum number of worker threads for parallel extraction/analysis")
     token_warning_threshold: int = Field(default=100000, description="Threshold for token count warning before LLM analysis")
-    
+
+    # Context Enhancement Settings
+    enable_context_enhancement: bool = Field(default=True, description="Enable context enhancement of session insights")
+    context_sources: List[str] = Field(default=["obsidian", "git"], description="List of enabled context sources")
+    max_context_matches_per_source: int = Field(default=3, description="Maximum context matches per source")
+    context_relevance_threshold: float = Field(default=0.7, description="Minimum relevance score for context matches")
+    context_enhancement_timeout: float = Field(default=30.0, description="Timeout for context enhancement in seconds")
+
     model_config = SettingsConfigDict(
         env_file=".env.local",
         env_file_encoding="utf-8",

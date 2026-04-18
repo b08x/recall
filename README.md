@@ -4,6 +4,8 @@ Recall is a multi-platform session extraction and correlation tool. It gathers c
 
 ## Features
 
+- **Context Enhancement**: Intelligent enrichment of session insights using relevant documentation from Obsidian and development patterns from Git history through a pluggable **ContextSource architecture**.
+- **Enhanced Correlation**: Timeline synthesis leverages context insights to provide strategic recommendations and identify knowledge gaps filled during development workflows.
 - **Parallel Extraction**: High-performance session extraction and analysis using `ThreadPoolExecutor` and provider-specific **named `RateLimiter` queues** to prevent global throttling.
 - **Resilient Processing**: Integrated **Persistent Dead Letter Queue (DLQ)** that survives application restarts, with CLI management for auditing and retrying failed sessions.
 - **Subprocess Safety**: Enforced **execution timeouts** on all external CLI calls (GitHub, Git) to prevent thread starvation and application hangs.
@@ -52,19 +54,19 @@ cp .env.local.example .env.local
 Run extraction and correlation with a live dashboard:
 
 ```bash
-uv run recall --tui extract --days 3 --analyze
-uv run recall --tui correlate --days 7 --github-repo owner/repo
+uv run recall --tui extract --days 3 --analyze --enhance-context
+uv run recall --tui correlate --days 7 --github-repo owner/repo --enhance-context
 ```
 
 ### CLI Commands
 
 Extract sessions and persist them:
 ```bash
-uv run recall extract --days 7 --platforms gemini,claude --analyze
+uv run recall extract --days 7 --platforms gemini,claude --analyze --enhance-context
 # Use --insights-model to specify a deeper model for session insights
-uv run recall extract --days 3 --analyze --insights-model openai/gpt-4o
+uv run recall extract --days 3 --analyze --insights-model openai/gpt-4o --enhance-context
 # Use --overwrite to re-run AI analysis for previously processed sessions
-uv run recall extract --days 7 --analyze --overwrite
+uv run recall extract --days 7 --analyze --overwrite --enhance-context
 ```
 
 Semantic search across all saved sessions:
@@ -74,7 +76,9 @@ uv run recall search "how did I fix that typescript error?"
 
 Correlate and print summary:
 ```bash
-uv run recall correlate --days 14
+uv run recall correlate --days 14 --enhance-context
+# Enhanced correlation with context from documentation and git patterns
+uv run recall correlate --days 7 --github-repo owner/repo --enhance-context
 ```
 
 ### DLQ Management

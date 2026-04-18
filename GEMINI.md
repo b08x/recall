@@ -4,17 +4,18 @@ Recall is a modern Python application designed for multi-platform session extrac
 
 ## Project Overview
 
-- **Purpose**: Unified tool for capturing and correlating activity across multiple AI and developer platforms.
+- **Purpose**: Unified tool for capturing and correlating activity across multiple AI and developer platforms with intelligent context enhancement.
 - **Main Technologies**:
   - **Python 3.12+**: Compatible with standard environments.
   - **uv**: Modern Python package and project manager.
   - **Rich**: Powers the terminal user interface (TUI) and dashboard.
   - **Pydantic / Pydantic-Settings**: Handles data modeling and decoupled configuration.
-  - **DSPy**: Powers the AI correlation and session analysis modules with **Pydantic-enforced predictors**.
+  - **DSPy**: Powers the AI correlation and session analysis modules with **Pydantic-enforced predictors** and context enhancement.
   - **Tenacity**: Provides robust exponential backoff retry logic for API interactions.
   - **SQLite**: Relational storage for sessions and insights with **transactional tracking**.
   - **ChromaDB**: Vector database for semantic search.
   - **Ollama / tiktoken**: Local embeddings using **snowflake-arctic-embed2:568m** with a **8192 token context window** and precise token management.
+  - **ContextSource Architecture**: Pluggable system for enriching insights with documentation and development patterns.
 
   ## Architecture & Structure
 The project follows a standard `src`-layout for modern Python packages:
@@ -33,6 +34,8 @@ The project follows a standard `src`-layout for modern Python packages:
     - `sqlite_store.py`: SQLite implementation with **Write-Ahead Logging (WAL)** mode enabled, **thread-local connection pooling**, full object reconstruction, and persistent DLQ tracking.
     - `vector_store.py`: ChromaDB implementation with **tiktoken truncation (or conservative regex fallback)** and safety buffers.
   - `providers/`: Specialized extractors for Gemini, Claude Code, Hermes, OpenCode, Obsidian, and Git.
+    - `context/`: ContextSource plugins (ObsidianContextSource, GitContextSource) for insight enhancement with hybrid relevance matching.
+  - `context.py`: Context enhancement orchestration with ContextSourceManager and pluggable architecture.
 
 ## Building and Running
 
@@ -45,18 +48,21 @@ uv sync
 ### Execution
 Run the application via the `uv` entrypoint:
 ```bash
-# Standard CLI
-uv run recall extract --days 3 --analyze
+# Standard CLI with context enhancement
+uv run recall extract --days 3 --analyze --enhance-context
+
+# Enhanced correlation with context sources
+uv run recall correlate --days 7 --enhance-context
 
 # Semantic Search
 uv run recall search "authentication"
 
-# Rich TUI Dashboard
-uv run recall --tui correlate --github-repo owner/repo
+# Rich TUI Dashboard with context enhancement
+uv run recall --tui correlate --github-repo owner/repo --enhance-context
 ```
 
 ### Configuration
-Manage paths, API keys, and rate limits in `.env.local`. See `.env.local.example` for the available fields including `MAX_WORKERS`, `EMBEDDING_MAX_TOKENS`, `CHUNK_MAX_CHARS`, `REQUESTS_PER_MINUTE`, and `RETRY_MAX_ATTEMPTS`.
+Manage paths, API keys, and rate limits in `.env.local`. See `.env.local.example` for the available fields including `MAX_WORKERS`, `EMBEDDING_MAX_TOKENS`, `CHUNK_MAX_CHARS`, `REQUESTS_PER_MINUTE`, `RETRY_MAX_ATTEMPTS`, and context enhancement settings (`ENABLE_CONTEXT_ENHANCEMENT`, `CONTEXT_SOURCES`, `CONTEXT_RELEVANCE_THRESHOLD`).
 
 ## Development Conventions
 
