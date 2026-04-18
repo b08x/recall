@@ -95,8 +95,8 @@ class HermesProvider(BaseProvider):
             tool_count = 0
 
             for row_raw in message_rows:
-                row = dict(row_raw)
-                role = row["role"]
+                msg_dict = {k: row_raw[k] for k in row_raw.keys()}
+                role = msg_dict["role"]
 
                 # Handle tool results - attach to previous assistant
                 if role == "tool":
@@ -108,8 +108,8 @@ class HermesProvider(BaseProvider):
 
                     if last_asst:
                         last_asst.tool_results.append(ToolResult(
-                            tool_use_id=row["tool_call_id"] or f"tool-{row['id']}",
-                            output=row["content"] or ""
+                            tool_use_id=msg_dict.get("tool_call_id") or f"tool-{msg_dict['id']}",
+                            output=msg_dict.get("content") or ""
                         ))
                     continue
 
@@ -117,9 +117,9 @@ class HermesProvider(BaseProvider):
 
                 # Extract tool calls (if any)
                 tool_calls = []
-                if msg_type == "assistant" and row.get("tool_calls"):
+                if msg_type == "assistant" and msg_dict.get("tool_calls"):
                     try:
-                        tc_data_list = json.loads(row["tool_calls"])
+                        tc_data_list = json.loads(msg_dict["tool_calls"])
                         for tc_data in tc_data_list:
                             tool_calls.append(ToolCall(
                                 id=tc_data.get("id", ""),
@@ -130,7 +130,7 @@ class HermesProvider(BaseProvider):
                         pass
 
                 # Only add message if it has meaningful content
-                if row["content"] or row["reasoning"] or tool_calls:
+                if msg_dict["content"] or msg_dict["reasoning"] or tool_calls:
                     if msg_type == "user":
                         user_count += 1
                     else:
@@ -140,24 +140,24 @@ class HermesProvider(BaseProvider):
 
                     # Get timestamp if available
                     timestamp = None
-                    if row.get("timestamp"):
+                    if msg_dict.get("timestamp"):
                         try:
-                            timestamp = datetime.fromtimestamp(row["timestamp"], tz=timezone.utc)
+                            timestamp = datetime.fromtimestamp(msg_dict["timestamp"], tz=timezone.utc)
                         except (ValueError, TypeError):
                             pass
 
                     messages.append(ParsedMessage(
-                        id=f"hermes-{row['id']}",
+                        id=f"hermes-{msg_dict['id']}",
                         session_id=f"hermes-agent:{session_id}",
                         type=msg_type,
-                        content=row["content"] or "",
-                        thinking=row["reasoning"],
+                        content=msg_dict["content"] or "",
+                        thinking=msg_dict["reasoning"],
                         tool_calls=tool_calls,
                         tool_results=[],
                         usage={
-                            "outputTokens": row["token_count"] or 0,
+                            "outputTokens": msg_dict["token_count"] or 0,
                             "model": session_row["model"] or "unknown"
-                        } if row["token_count"] else None,
+                        } if msg_dict["token_count"] else None,
                         timestamp=timestamp
                     ))
 
