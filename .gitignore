@@ -22,3 +22,6 @@ recall.db
 
 opencode.json
 .opencode/
+
+recall.db-shm
+recall.db-wal
