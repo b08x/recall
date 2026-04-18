@@ -4,8 +4,9 @@ Recall is a multi-platform session extraction and correlation tool. It gathers c
 
 ## Features
 
-- **Parallel Extraction**: High-performance session extraction and analysis using `ThreadPoolExecutor` and a **thread-safe `RateLimiter`**.
-- **Transactional Dual-Writes**: Atomic synchronization between relational SQLite data and ChromaDB vector chunks with **automatic failed-write reconciliation**.
+- **Parallel Extraction**: High-performance session extraction and analysis using `ThreadPoolExecutor` and provider-specific **named `RateLimiter` queues** to prevent global throttling.
+- **Resilient Processing**: Integrated **Dead Letter Queue (DLQ)** with an automatic one-time retry mechanism to capture and handle transient session processing failures.
+- **Transactional Dual-Writes**: Atomic synchronization between relational SQLite data and ChromaDB vector chunks with **WAL-enabled concurrency safety** and automatic failed-write reconciliation.
 - **Cost Management**: Integrated **Pre-flight Token Estimation** using `tiktoken` with user confirmation thresholds to prevent API cost overruns.
 - **Schema Safety**: Uses **DSPy Pydantic-aware Predictors** and strict models for AI-generated insights, ensuring output consistency and eliminating heuristic parsing.
 - **Safety-First Windowing**: Conservative chunking and token-aware context management with **built-in safety buffers** to maximize input quality and prevent local model failures.

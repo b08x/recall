@@ -18,7 +18,7 @@ from recall.db import PersistenceManager
 from recall.models import ParsedSession, ParsedNote, SessionAnalysis, SessionInsight, SessionInsights, CorrelationResult
 from recall.config import Settings
 from recall.logging import debug, info, error, step, log_metric, log_data
-from recall.utils.limiter import RateLimiter, get_retry_decorator, rate_limited, set_default_limiter
+from recall.utils.limiter import get_limiter, get_retry_decorator, rate_limited, set_global_rpm
 
 try:
     import dspy
@@ -40,9 +40,8 @@ class MultiSourceCorrelator:
     def __init__(self, settings: Optional[Settings] = None):
         self.settings = settings or Settings()
         
-        # Rate Limiting - Initialize early so providers/db can use the global limiter
-        self.limiter = RateLimiter(requests_per_minute=self.settings.requests_per_minute)
-        set_default_limiter(self.limiter)
+        # Rate Limiting - Configure global RPM and use named limiters
+        set_global_rpm(self.settings.requests_per_minute)
 
         self.providers = {
             "gemini": GeminiProvider(),
@@ -69,6 +68,9 @@ class MultiSourceCorrelator:
 
         # Run reconciliation for any failed indexing jobs from previous runs
         self.db.reconcile_failed_vectors()
+
+        # Dead Letter Queue for failed session processing
+        self.dlq: List[Dict[str, Any]] = []
 
     def estimate_session_tokens(self, sessions: List[ParsedSession]) -> int:
         """Estimate the total number of tokens across a list of sessions."""
@@ -114,7 +116,7 @@ class MultiSourceCorrelator:
                 debug(f"Analyzing session (ID: {session.id})")
                 
                 # 1. Topic/Activity Analysis
-                analysis_data = self.analyze_session_topics(session, model=analysis_model)
+                analysis_data = self.analyze_session_topics(session, model=analysis_model, provider=platform)
                 session.summary = analysis_data.get("topics", [])
                 if session.summary:
                     session.generated_title = session.summary[0]
@@ -128,7 +130,12 @@ class MultiSourceCorrelator:
                 )
 
                 # 2. Insight Extraction (REC-002: Simplified Parsing)
-                insight_data = self.analyze_session_insights(session, model=insights_model, provider=insights_provider)
+                # Pass the platform as the provider for rate limiting
+                insight_data = self.analyze_session_insights(
+                    session, 
+                    model=insights_model, 
+                    provider=insights_provider or platform
+                )
                 
                 valid_insights = []
                 for i in insight_data.get("insights", []):
@@ -185,10 +192,10 @@ class MultiSourceCorrelator:
         log_metric("extract_all_started", 1)
         log_metric("target_platforms", len(target_platforms))
         
-        # We'll use a thread pool for the processing of sessions across all platforms
+        # Track futures with their session metadata for DLQ/Retry
+        future_to_session = {}
+        
         with ThreadPoolExecutor(max_workers=self.settings.max_workers) as executor:
-            futures = []
-            
             for platform in target_platforms:
                 debug(f"Processing platform: {platform}")
                 if callback:
@@ -211,19 +218,49 @@ class MultiSourceCorrelator:
                 log_metric("sessions_per_platform", len(sessions))
                 
                 for session in sessions:
-                    # Submit each session to the thread pool for analysis and persistence
-                    futures.append(executor.submit(
+                    payload = {
+                        "session": session,
+                        "platform": platform,
+                        "analyze": analyze,
+                        "overwrite": overwrite,
+                        "analysis_model": analysis_model,
+                        "insights_model": insights_model,
+                        "insights_provider": insights_provider
+                    }
+                    future = executor.submit(
                         self._process_single_session,
                         session, platform, analyze, overwrite,
                         analysis_model, insights_model, insights_provider, callback
-                    ))
+                    )
+                    future_to_session[future] = payload
             
-            # Wait for all sessions to be processed
-            for future in futures:
+            # Wait for all sessions to be processed with retry logic
+            for future in future_to_session:
+                payload = future_to_session[future]
+                session_id = payload["session"].id
                 try:
                     future.result()
                 except Exception as e:
-                    error(f"Error in session processing thread: {e}")
+                    error(f"Transient error processing session {session_id}, retrying once: {e}")
+                    # Explicit one-time retry for transient errors
+                    try:
+                        self._process_single_session(
+                            payload["session"], payload["platform"], payload["analyze"], 
+                            payload["overwrite"], payload["analysis_model"], 
+                            payload["insights_model"], payload["insights_provider"], callback
+                        )
+                        info(f"Successfully recovered session {session_id} on retry")
+                    except Exception as retry_e:
+                        error(f"Final failure for session {session_id}: {retry_e}")
+                        self.dlq.append({
+                            "payload": payload,
+                            "error": str(retry_e),
+                            "failed_at": datetime.now(timezone.utc).isoformat()
+                        })
+        
+        if self.dlq:
+            error(f"Extraction completed with {len(self.dlq)} items in Dead Letter Queue")
+            log_data("dlq_items", [item["payload"]["session"].id for item in self.dlq])
         
         debug("Extraction all complete")
         if callback:
@@ -245,7 +282,7 @@ class MultiSourceCorrelator:
             max_wait=self.settings.retry_max_wait
         )
         def _fetch():
-            self.limiter.wait()
+            get_limiter("github").wait()
             since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
             
             # Check gh CLI
@@ -392,7 +429,7 @@ class MultiSourceCorrelator:
         except Exception:
             return False
 
-    def analyze_session_topics(self, session: ParsedSession, model: Optional[str] = None) -> Dict[str, Any]:
+    def analyze_session_topics(self, session: ParsedSession, model: Optional[str] = None, provider: str = "default") -> Dict[str, Any]:
         """Use DSPy with contextual chunking to analyze session topics."""
         debug(f"Configuring DSPy for session analysis (model: {model or 'default'})")
         if not DSPY_AVAILABLE or not self.configure_dspy(model):
@@ -401,8 +438,10 @@ class MultiSourceCorrelator:
         
         debug("Running SessionAnalysisModule")
         analyzer = SessionAnalysisModule()
+        analyzer.limiter = get_limiter(provider)
         try:
-            self.limiter.wait()
+            # We still wait once here to ensure the session processing itself is spaced out
+            analyzer.limiter.wait()
             result = analyzer(session)
             debug(f"SessionAnalysisModule result: {result}")
             return result
@@ -413,13 +452,17 @@ class MultiSourceCorrelator:
     def analyze_session_insights(self, session: ParsedSession, model: Optional[str] = None, provider: Optional[str] = None) -> Dict[str, Any]:
         """Use DSPy to extract categorized insights from a session."""
         debug(f"Configuring DSPy for session insights (model: {model or 'default'})")
+        # Use insights_provider if specified, otherwise the dspy_provider
+        active_provider = provider or self.settings.dspy_insights_provider or self.dspy_provider
+        
         if not DSPY_AVAILABLE or not self.configure_dspy(model, provider):
             return {"insights": [], "primary_theme": "General", "confidence": 0.0}
         
         debug("Running SessionInsightModule")
         analyzer = SessionInsightModule()
+        analyzer.limiter = get_limiter(active_provider)
         try:
-            self.limiter.wait()
+            analyzer.limiter.wait()
             result = analyzer(session)
             debug(f"SessionInsightModule result: {result}")
             return result
@@ -454,9 +497,10 @@ class MultiSourceCorrelator:
         
         debug(f"Prepared {len(sessions)} sessions and {len(commits)} commits for correlation")
         correlator = CorrelationModule()
+        correlator.limiter = get_limiter("correlation")
         
         try:
-            self.limiter.wait()
+            correlator.limiter.wait()
             result = correlator(sessions=sessions, commits=commits, file_changes=[])
             debug("DSPy correlation successful")
             return result

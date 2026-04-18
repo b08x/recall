@@ -4,7 +4,7 @@ import uuid
 import time
 from typing import List, Dict, Optional, Any
 from recall.logging import debug, error
-from recall.utils.limiter import get_default_limiter, get_retry_decorator
+from recall.utils.limiter import get_limiter, get_retry_decorator
 
 try:
     import tiktoken
@@ -33,7 +33,7 @@ class OllamaEmbeddingFunction(EmbeddingFunction):
         # 10% safety buffer to account for tokenizer differences between cl100k_base and local model
         self.safe_limit = int(max_tokens * 0.9)
         self.client = httpx.Client(timeout=60.0)
-        self.limiter = get_default_limiter()
+        self.limiter = get_limiter("embeddings")
         self.encoding = tiktoken.get_encoding("cl100k_base") if HAS_TIKTOKEN else None
 
     def __call__(self, input: Documents) -> Embeddings:

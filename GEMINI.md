@@ -21,17 +21,17 @@ Recall is a modern Python application designed for multi-platform session extrac
 The project follows a standard `src`-layout for modern Python packages:
 
 - `src/recall/`: Core package directory.
-  - `core.py`: Main orchestration logic with **concurrent session analysis** via `ThreadPoolExecutor` and token estimation pre-flight checks.
+  - `core.py`: Main orchestration logic with **concurrent session analysis** via `ThreadPoolExecutor`, token estimation pre-flight checks, and a **Dead Letter Queue (DLQ)** with a one-time retry mechanism for resilient processing.
   - `cli.py`: Command-line interface with **cost-aware user confirmations**.
   - `config.py`: Configuration management via `.env.local` supporting `MAX_WORKERS` and safety limits.
-  - `utils/`: Common utilities including a **thread-safe `RateLimiter`** and retry decorators.
+  - `utils/`: Common utilities including a **provider-specific `RateLimiter`** (named queues) and retry decorators.
   - `models.py`: Unified dataclass and Pydantic models.
   - `tui.py`: Rich-based dashboard.
   - `logging.py`: Centralized debug logging system.
   - `ai/`: DSPy modules and signatures using **Pydantic-aware predictors** for schema safety.
   - `db/`: Persistence layer with **Atomic Dual-Writes**.
     - `manager.py`: Orchestrates transactional SQL and Vector synchronization with **automatic failed-write reconciliation**.
-    - `sqlite_store.py`: SQLite implementation with **full object reconstruction** and indexing status tracking.
+    - `sqlite_store.py`: SQLite implementation with **Write-Ahead Logging (WAL)** mode enabled, full object reconstruction, and indexing status tracking.
     - `vector_store.py`: ChromaDB implementation with **tiktoken truncation and safety buffers**.
   - `providers/`: Specialized extractors for Gemini, Claude Code, Hermes, OpenCode, Obsidian, and Git.
 
@@ -66,7 +66,8 @@ Manage paths, API keys, and rate limits in `.env.local`. See `.env.local.example
   - Follow modern Python idioms and type hints.
   - Use absolute imports within the `recall` namespace.
 - **Logging**: Use the centralized `recall.logging` module (`debug`, `info`, `error`) to ensure logs are captured both in the log file and the TUI dashboard.
-- **Analysis Caching & Reconciliation**: Session analysis (topics, files, actions) and categorized insights are cached in SQLite. The system automatically reconciles failed vector store writes on startup, ensuring long-term data consistency.
+- **Analysis Caching & Reconciliation**: Session analysis (topics, files, actions) and categorized insights are cached in SQLite with **WAL-enabled concurrency safety**. The system automatically reconciles failed vector store writes on startup and uses a **Dead Letter Queue (DLQ) to capture persistent analysis failures** during extraction.
+- **Provider-Specific Throttling**: Rate limiting is handled via named queues (e.g., `gemini`, `github`, `embeddings`), allowing independent throughput for different providers and preventing global stalls.
 - **Deep Insights**: Beyond basic topic extraction, the system generates categorized insights (Technical, Strategic, Procedural, etc.) using configurable models and providers, relying on **structured Pydantic outputs** rather than heuristic parsing.
 - **AI Logic**: All LLM interactions should be encapsulated within DSPy modules in `src/recall/ai/`.
 - **Validation**: After modifying core logic, verify both standard CLI output and TUI rendering integrity.
