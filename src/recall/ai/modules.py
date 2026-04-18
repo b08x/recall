@@ -13,6 +13,7 @@ from .signatures import (
 )
 from .chunking import ContextualChunker
 from recall.logging import debug, info, error
+from recall.utils.limiter import get_default_limiter
 
 if DSPY_AVAILABLE:
     class SessionAnalysisModule(dspy.Module):
@@ -22,6 +23,7 @@ if DSPY_AVAILABLE:
             super().__init__()
             self.extract_topics = dspy.ChainOfThought(SessionTopicExtractor)
             self.chunker = ContextualChunker(max_chunk_chars=max_chunk_chars)
+            self.limiter = get_default_limiter()
 
         def forward(self, session: Any) -> Dict[str, Any]:
             """Process a session through contextual chunking and topic extraction."""
@@ -36,6 +38,7 @@ if DSPY_AVAILABLE:
             for i, chunk in enumerate(chunks):
                 debug(f"Processing chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
                 try:
+                    self.limiter.wait()
                     result = self.extract_topics(session_content=chunk)
                     if result:
                         if hasattr(result, 'topics'):
@@ -63,9 +66,11 @@ if DSPY_AVAILABLE:
             self.correlate_commits = dspy.Predict(CommitSessionCorrelator)
             self.synthesize = dspy.ChainOfThought(TimelineSynthesizer)
             self.one_thing = dspy.ChainOfThought(OneThingGenerator)
+            self.limiter = get_default_limiter()
 
         def forward(self, sessions: List[Dict], commits: List[Dict], file_changes: List[Dict]):
             # Stage 1: Synthesize timeline
+            self.limiter.wait()
             timeline_result = self.synthesize(
                 sessions=sessions,
                 commits=commits,
@@ -73,6 +78,7 @@ if DSPY_AVAILABLE:
             )
 
             # Stage 2: Generate One Thing
+            self.limiter.wait()
             one_thing_result = self.one_thing(
                 recent_activity=timeline_result.narrative,
                 workstreams=timeline_result.workstreams,

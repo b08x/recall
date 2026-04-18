@@ -1459,6 +1459,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "rich" },
+    { name = "tenacity" },
 ]
 
 [package.metadata]
@@ -1469,6 +1470,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "rich", specifier = ">=15.0.0" },
+    { name = "tenacity", specifier = ">=9.0.0" },
 ]
 
 [[package]]

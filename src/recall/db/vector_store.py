@@ -1,8 +1,10 @@
 import httpx
 import json
 import uuid
+import time
 from typing import List, Dict, Optional, Any
 from recall.logging import debug, error
+from recall.utils.limiter import get_default_limiter, get_retry_decorator
 
 try:
     import chromadb
@@ -15,8 +17,6 @@ except ImportError:
     class Documents: pass
     class Embeddings: pass
 
-import time
-
 class OllamaEmbeddingFunction(EmbeddingFunction):
     """Custom embedding function for Ollama's embeddinggemma model."""
     
@@ -24,32 +24,39 @@ class OllamaEmbeddingFunction(EmbeddingFunction):
         self.host = host
         self.model = model
         self.client = httpx.Client(timeout=60.0)  # Increased timeout
+        self.limiter = get_default_limiter()
 
     def __call__(self, input: Documents) -> Embeddings:
         embeddings = []
+        
+        # Configure retry based on global limiter settings (or defaults)
+        retry_decorator = get_retry_decorator(
+            max_attempts=3,
+            min_wait=1.0,
+            max_wait=10.0,
+            exceptions=(httpx.HTTPError, Exception)
+        )
+
+        @retry_decorator
+        def _get_embedding(text: str):
+            self.limiter.wait()
+            response = self.client.post(
+                f"{self.host}/api/embeddings",
+                json={"model": self.model, "prompt": text}
+            )
+            response.raise_for_status()
+            return response.json()["embedding"]
+
         for text in input:
             # Truncate text to avoid 500 errors from Ollama on overly large inputs
             # 3000 chars is very safe (~750-1000 tokens)
             safe_text = text[:3000] if len(text) > 3000 else text
             
-            success = False
-            for attempt in range(3):
-                try:
-                    response = self.client.post(
-                        f"{self.host}/api/embeddings",
-                        json={"model": self.model, "prompt": safe_text}
-                    )
-                    response.raise_for_status()
-                    data = response.json()
-                    embeddings.append(data["embedding"])
-                    success = True
-                    break
-                except Exception as e:
-                    error(f"Ollama embedding error (attempt {attempt+1}/3): {e}")
-                    if attempt < 2:
-                        time.sleep(1 * (attempt + 1))  # Exponential backoff
-            
-            if not success:
+            try:
+                embedding = _get_embedding(safe_text)
+                embeddings.append(embedding)
+            except Exception as e:
+                error(f"Ollama embedding persistent error: {e}")
                 # Return zero vector on persistent error to maintain dimension consistency
                 embeddings.append([0.0] * 768)
                 

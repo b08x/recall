@@ -17,6 +17,7 @@ from recall.db import PersistenceManager
 from recall.models import ParsedSession, ParsedNote, SessionAnalysis, CorrelationResult
 from recall.config import Settings
 from recall.logging import debug, info, error
+from recall.utils.limiter import RateLimiter, get_retry_decorator, rate_limited, set_default_limiter
 
 try:
     import dspy
@@ -30,6 +31,10 @@ class MultiSourceCorrelator:
     def __init__(self, settings: Optional[Settings] = None):
         self.settings = settings or Settings()
         
+        # Rate Limiting - Initialize early so providers/db can use the global limiter
+        self.limiter = RateLimiter(requests_per_minute=self.settings.requests_per_minute)
+        set_default_limiter(self.limiter)
+
         self.providers = {
             "gemini": GeminiProvider(),
             "hermes": HermesProvider(),
@@ -49,7 +54,7 @@ class MultiSourceCorrelator:
         # DSPy configuration from settings
         self.dspy_provider = self.settings.dspy_provider
         self.dspy_model = self.settings.dspy_model
-
+        
     def extract_all(self, days: int = 7, 
                     platforms: Optional[List[str]] = None,
                     analyze: bool = False,
@@ -131,15 +136,21 @@ class MultiSourceCorrelator:
 
     def fetch_github_data(self, repo: str, days: int = 7) -> Dict:
         """Fetch GitHub commits via gh CLI."""
-        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-        
-        # Check gh CLI
-        result = subprocess.run(["gh", "--version"], capture_output=True)
-        if result.returncode != 0:
-            return {"commits": [], "pull_requests": []}
-        
-        commits = []
-        try:
+        @get_retry_decorator(
+            max_attempts=self.settings.retry_max_attempts,
+            min_wait=self.settings.retry_min_wait,
+            max_wait=self.settings.retry_max_wait
+        )
+        def _fetch():
+            self.limiter.wait()
+            since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            
+            # Check gh CLI
+            result = subprocess.run(["gh", "--version"], capture_output=True)
+            if result.returncode != 0:
+                return {"commits": [], "pull_requests": []}
+            
+            commits = []
             # Prepare env with GITHUB_TOKEN if available
             env = os.environ.copy()
             if self.settings.github_token:
@@ -152,17 +163,23 @@ class MultiSourceCorrelator:
                 "--jq", ".[] | {sha: .sha[0:7], message: .commit.message, date: .commit.author.date, author: .commit.author.name}"
             ], capture_output=True, text=True, env=env)
             
-            if result.returncode == 0:
-                for line in result.stdout.strip().split("\n"):
-                    if line:
-                        try:
-                            commits.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            pass
-        except Exception:
-            pass
-        
-        return {"commits": commits, "pull_requests": []}
+            if result.returncode != 0:
+                error(f"GitHub API error: {result.stderr}")
+                raise Exception(f"GitHub API returned exit code {result.returncode}")
+
+            for line in result.stdout.strip().split("\n"):
+                if line:
+                    try:
+                        commits.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+            return {"commits": commits, "pull_requests": []}
+
+        try:
+            return _fetch()
+        except Exception as e:
+            error(f"Failed to fetch GitHub data after retries: {e}")
+            return {"commits": [], "pull_requests": []}
 
     def build_timeline(self, sessions: Dict[str, List[Any]],
                        github_data: Optional[Dict] = None,
@@ -236,29 +253,29 @@ class MultiSourceCorrelator:
                 api_key = self.settings.openrouter_api_key
                 if not api_key:
                     return False
-                lm = dspy.LM(f"openrouter/{model_id}", api_key=api_key.get_secret_value(), base_url="https://openrouter.ai/api/v1")
+                lm = dspy.LM(f"openrouter/{model_id}", api_key=api_key.get_secret_value(), base_url="https://openrouter.ai/api/v1", num_retries=self.settings.retry_max_attempts)
             elif provider == 'openai':
                 api_key = self.settings.openai_api_key
                 if not api_key:
                     return False
-                lm = dspy.LM(model_id, api_key=api_key.get_secret_value())
+                lm = dspy.LM(model_id, api_key=api_key.get_secret_value(), num_retries=self.settings.retry_max_attempts)
             elif provider == 'mistral':
                 api_key = self.settings.mistral_api_key
                 if not api_key:
                     return False
-                lm = dspy.LM(f"mistral/{model_id}", api_key=api_key.get_secret_value())
+                lm = dspy.LM(f"mistral/{model_id}", api_key=api_key.get_secret_value(), num_retries=self.settings.retry_max_attempts)
             elif provider == 'ollama':
                 _, model_name = model_id.split("/", 1) if "/" in model_id else ("", model_id)
-                lm = dspy.LM(f"ollama_chat/{model_name}")
+                lm = dspy.LM(f"ollama_chat/{model_name}", num_retries=self.settings.retry_max_attempts)
             else:
                 env_key = f"{provider.upper()}_API_KEY"
                 api_key = getattr(self.settings, env_key.lower(), None)
                 if api_key and hasattr(api_key, 'get_secret_value'):
-                    lm = dspy.LM(f"{provider}/{model_id}", api_key=api_key.get_secret_value())
+                    lm = dspy.LM(f"{provider}/{model_id}", api_key=api_key.get_secret_value(), num_retries=self.settings.retry_max_attempts)
                 else:
                     # Fallback to os.environ if not in settings
                     api_key_val = os.environ.get(env_key)
-                    lm = dspy.LM(f"{provider}/{model_id}", api_key=api_key_val)
+                    lm = dspy.LM(f"{provider}/{model_id}", api_key=api_key_val, num_retries=self.settings.retry_max_attempts)
             
             dspy.configure(lm=lm)
             return True
@@ -275,6 +292,7 @@ class MultiSourceCorrelator:
         debug("Running SessionAnalysisModule")
         analyzer = SessionAnalysisModule()
         try:
+            self.limiter.wait()
             result = analyzer(session)
             debug(f"SessionAnalysisModule result: {result}")
             return result
@@ -308,6 +326,7 @@ class MultiSourceCorrelator:
         correlator = CorrelationModule()
         
         try:
+            self.limiter.wait()
             return correlator(sessions=sessions, commits=commits, file_changes=[])
         except Exception:
             return self._heuristic_correlation(timeline)

@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     # Platform specific
     github_token: Optional[SecretStr] = None
     
+    # Rate Limiting & Retry
+    retry_max_attempts: int = Field(default=5, description="Maximum number of retry attempts")
+    retry_min_wait: float = Field(default=1.0, description="Minimum wait time between retries (seconds)")
+    retry_max_wait: float = Field(default=60.0, description="Maximum wait time between retries (seconds)")
+    requests_per_minute: int = Field(default=20, description="Conservative rate limit (requests per minute)")
+    
     model_config = SettingsConfigDict(
         env_file=".env.local",
         env_file_encoding="utf-8",
