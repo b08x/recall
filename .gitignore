@@ -19,3 +19,6 @@ graphify-out/
 chroma_db/
 recall.db
 .gemini/
+
+opencode.json
+.opencode/
