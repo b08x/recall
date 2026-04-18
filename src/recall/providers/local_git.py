@@ -45,7 +45,7 @@ class LocalGitProvider:
         ]
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
             commits = []
             for line in result.stdout.strip().split('\n'):
                 if line:

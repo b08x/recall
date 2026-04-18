@@ -5,9 +5,11 @@ Recall is a multi-platform session extraction and correlation tool. It gathers c
 ## Features
 
 - **Parallel Extraction**: High-performance session extraction and analysis using `ThreadPoolExecutor` and provider-specific **named `RateLimiter` queues** to prevent global throttling.
-- **Resilient Processing**: Integrated **Dead Letter Queue (DLQ)** with an automatic one-time retry mechanism to capture and handle transient session processing failures.
+- **Resilient Processing**: Integrated **Persistent Dead Letter Queue (DLQ)** that survives application restarts, with CLI management for auditing and retrying failed sessions.
+- **Subprocess Safety**: Enforced **execution timeouts** on all external CLI calls (GitHub, Git) to prevent thread starvation and application hangs.
 - **Transactional Dual-Writes**: Atomic synchronization between relational SQLite data and ChromaDB vector chunks with **WAL-enabled concurrency safety** and automatic failed-write reconciliation.
-- **Cost Management**: Integrated **Pre-flight Token Estimation** using `tiktoken` with user confirmation thresholds to prevent API cost overruns.
+- **Connection Pooling**: Optimized database performance using **thread-local connection reuse** to reduce instantiation overhead during high-volume operations.
+- **Cost Management**: Integrated **Pre-flight Token Estimation** using `tiktoken` (with robust regex-based fallbacks) and user confirmation thresholds to prevent API cost overruns.
 - **Schema Safety**: Uses **DSPy Pydantic-aware Predictors** and strict models for AI-generated insights, ensuring output consistency and eliminating heuristic parsing.
 - **Safety-First Windowing**: Conservative chunking and token-aware context management with **built-in safety buffers** to maximize input quality and prevent local model failures.
 - **Auto-Migration**: Self-healing SQLite schema that automatically handles database updates.
@@ -73,6 +75,20 @@ uv run recall search "how did I fix that typescript error?"
 Correlate and print summary:
 ```bash
 uv run recall correlate --days 14
+```
+
+### DLQ Management
+
+Manage sessions that failed during extraction or analysis:
+```bash
+# List failed items in the DLQ
+uv run recall dlq --list
+
+# Retry processing all items in the DLQ
+uv run recall dlq --retry
+
+# Clear all items from the DLQ
+uv run recall dlq --clear
 ```
 
 ## Project Structure

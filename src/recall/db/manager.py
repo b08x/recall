@@ -91,7 +91,25 @@ class PersistenceManager:
                 pass
             raise
         finally:
-            conn.close()
+            # We don't close the connection here to allow reuse across 
+            # the same thread in the Pool. It is closed when the thread is destroyed.
+            pass
+
+    def save_dlq_item(self, session_id: str, payload: Dict[str, Any], error_msg: str):
+        """Forward DLQ save to SQLite store."""
+        self.sqlite.save_dlq_item(session_id, payload, error_msg)
+
+    def get_dlq_items(self) -> List[Dict[str, Any]]:
+        """Retrieve all items from DLQ."""
+        return self.sqlite.get_dlq_items()
+
+    def delete_dlq_item(self, dlq_id: int):
+        """Forward DLQ delete to SQLite store."""
+        self.sqlite.delete_dlq_item(dlq_id)
+
+    def increment_dlq_retry(self, dlq_id: int):
+        """Forward DLQ retry increment to SQLite store."""
+        self.sqlite.increment_dlq_retry(dlq_id)
 
     def persist_correlation(self, result: CorrelationResult):
         """Save synthesized correlation data."""

@@ -1,5 +1,7 @@
 import sqlite3
 import json
+import threading
+from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from typing import List, Dict, Optional, Any
 from recall.models import (
@@ -13,13 +15,23 @@ class SQLiteStore:
 
     def __init__(self, db_path: str):
         self.db_path = db_path
+        self._local = threading.local()
         self._init_db()
 
     def _get_connection(self):
-        conn = sqlite3.connect(self.db_path, timeout=5000)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
-        return conn
+        """Get or create a thread-local database connection."""
+        if not hasattr(self._local, "conn") or self._local.conn is None:
+            self._local.conn = sqlite3.connect(self.db_path, timeout=5000)
+            self._local.conn.row_factory = sqlite3.Row
+            self._local.conn.execute("PRAGMA journal_mode=WAL;")
+        return self._local.conn
+
+    def close(self):
+        """Close the thread-local connection."""
+        if hasattr(self._local, "conn") and self._local.conn:
+            self._local.conn.close()
+            self._local.conn = None
+
     def _init_db(self):
         """Initialize the database schema."""
         with self._get_connection() as conn:
@@ -114,6 +126,15 @@ class SQLiteStore:
                     session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
                     PRIMARY KEY (correlation_id, session_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS dlq (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT,
+                    payload TEXT NOT NULL,
+                    error TEXT,
+                    failed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    retry_count INTEGER DEFAULT 0
+                );
             """)
 
             # Simple migration: Add indexing_status if it doesn't exist
@@ -122,6 +143,62 @@ class SQLiteStore:
             if 'indexing_status' not in columns:
                 conn.execute("ALTER TABLE sessions ADD COLUMN indexing_status TEXT DEFAULT 'pending'")
                 conn.commit()
+
+    def save_dlq_item(self, session_id: str, payload: Dict[str, Any], error_msg: str):
+        """Save a failed session payload to the Dead Letter Queue table."""
+        # Convert non-serializable objects in payload if any
+        # The session in payload is a ParsedSession, which needs conversion
+        serializable_payload = payload.copy()
+        if "session" in serializable_payload and hasattr(serializable_payload["session"], "__dict__"):
+            # This is a bit tricky since ParsedSession might have nested objects
+            # MultiSourceCorrelator already uses asdict for some parts, but let's be safe
+            def make_serializable(obj):
+                if is_dataclass(obj):
+                    return asdict(obj)
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                if isinstance(obj, dict):
+                    return {k: make_serializable(v) for k, v in obj.items()}
+                if isinstance(obj, list):
+                    return [make_serializable(v) for v in obj]
+                return obj
+            
+            serializable_payload["session"] = make_serializable(serializable_payload["session"])
+
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT INTO dlq (session_id, payload, error)
+                VALUES (?, ?, ?)
+            """, (session_id, json.dumps(serializable_payload), error_msg))
+            conn.commit()
+
+    def get_dlq_items(self) -> List[Dict[str, Any]]:
+        """Retrieve all items from the Dead Letter Queue."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("SELECT id, session_id, payload, error, failed_at, retry_count FROM dlq")
+            items = []
+            for row in cursor.fetchall():
+                items.append({
+                    "id": row["id"],
+                    "session_id": row["session_id"],
+                    "payload": json.loads(row["payload"]),
+                    "error": row["error"],
+                    "failed_at": row["failed_at"],
+                    "retry_count": row["retry_count"]
+                })
+            return items
+
+    def delete_dlq_item(self, dlq_id: int):
+        """Remove an item from the Dead Letter Queue."""
+        with self._get_connection() as conn:
+            conn.execute("DELETE FROM dlq WHERE id = ?", (dlq_id,))
+            conn.commit()
+
+    def increment_dlq_retry(self, dlq_id: int):
+        """Increment the retry count for a DLQ item."""
+        with self._get_connection() as conn:
+            conn.execute("UPDATE dlq SET retry_count = retry_count + 1 WHERE id = ?", (dlq_id,))
+            conn.commit()
 
     def save_session(self, session: ParsedSession, conn: Optional[sqlite3.Connection] = None):
         """Save or update a session and its messages."""
@@ -161,13 +238,17 @@ class SQLiteStore:
                     msg.parent_id,
                     json.dumps(msg.usage) if msg.usage else None
                 ))
-
+                
                 # Save tool calls
-                for tc in msg.tool_calls:
-                    conn.execute("""
-                        INSERT OR REPLACE INTO tool_calls (id, message_id, name, input)
-                        VALUES (?, ?, ?, ?)
-                    """, (tc.id, msg.id, tc.name, json.dumps(tc.input)))
+                if msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        conn.execute("""
+                            INSERT OR REPLACE INTO tool_calls (
+                                id, message_id, name, input
+                            ) VALUES (?, ?, ?, ?)
+                        """, (
+                            tc.id, msg.id, tc.name, json.dumps(tc.input) if tc.input else None
+                        ))
             
             if should_close:
                 conn.commit()
@@ -175,36 +256,106 @@ class SQLiteStore:
             if should_close:
                 conn.close()
 
+    def update_indexing_status(self, session_id: str, status: str):
+        """Update the indexing status of a session."""
+        with self._get_connection() as conn:
+            conn.execute("UPDATE sessions SET indexing_status = ? WHERE id = ?", (status, session_id))
+            conn.commit()
+
+    def get_failed_indexing_sessions(self) -> List[str]:
+        """Find sessions that are marked as 'failed' or are still 'pending'."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("SELECT id FROM sessions WHERE indexing_status IN ('failed', 'pending')")
+            return [row['id'] for row in cursor.fetchall()]
+
+    def get_analysis(self, session_id: str) -> Optional[SessionAnalysis]:
+        """Retrieve saved analysis for a session."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("SELECT * FROM session_analysis WHERE session_id = ?", (session_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            
+            # Fetch topics
+            cursor = conn.execute("""
+                SELECT t.name FROM topics t
+                JOIN session_topics st ON t.id = st.topic_id
+                WHERE st.session_id = ?
+            """, (session_id,))
+            topics = [r['name'] for r in cursor.fetchall()]
+
+            # Fetch files
+            cursor = conn.execute("""
+                SELECT f.path FROM file_paths f
+                JOIN session_files sf ON f.id = sf.file_id
+                WHERE sf.session_id = ?
+            """, (session_id,))
+            files = [r['path'] for r in cursor.fetchall()]
+
+            return SessionAnalysis(
+                session_id=session_id,
+                topics=topics,
+                files_touched=files,
+                key_actions=json.loads(row['key_actions']) if row['key_actions'] else []
+            )
+
+    def get_insights(self, session_id: str) -> Optional[SessionInsights]:
+        """Retrieve saved insights for a session."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("SELECT * FROM session_insights WHERE session_id = ?", (session_id,))
+            rows = cursor.fetchall()
+            if not rows:
+                return None
+            
+            insights_list = []
+            for row in rows:
+                insights_list.append(SessionInsight(
+                    category=row['category'],
+                    content=row['content'],
+                    importance=row['importance'],
+                    primary_theme=row['primary_theme'],
+                    confidence=row['confidence']
+                ))
+            
+            return SessionInsights(
+                session_id=session_id,
+                insights=insights_list
+            )
+
     def save_analysis(self, analysis: SessionAnalysis, conn: Optional[sqlite3.Connection] = None):
-        """Save session topics, files, and actions."""
+        """Save session analysis (key actions, topics, files)."""
         should_close = False
         if conn is None:
             conn = self._get_connection()
             should_close = True
         
         try:
-            # Save base analysis
+            # Save main analysis
             conn.execute("""
                 INSERT OR REPLACE INTO session_analysis (session_id, key_actions)
                 VALUES (?, ?)
             """, (analysis.session_id, json.dumps(analysis.key_actions)))
 
-            # Save topics (normalized)
-            for topic in analysis.topics:
-                conn.execute("INSERT OR IGNORE INTO topics (name) VALUES (?)", (topic,))
+            # Save topics and relationships
+            for topic_name in analysis.topics:
+                conn.execute("INSERT OR IGNORE INTO topics (name) VALUES (?)", (topic_name,))
+                cursor = conn.execute("SELECT id FROM topics WHERE name = ?", (topic_name,))
+                topic_id = cursor.fetchone()[0]
                 conn.execute("""
                     INSERT OR IGNORE INTO session_topics (session_id, topic_id)
-                    SELECT ?, id FROM topics WHERE name = ?
-                """, (analysis.session_id, topic))
+                    VALUES (?, ?)
+                """, (analysis.session_id, topic_id))
 
-            # Save files (normalized)
-            for path in analysis.files_touched:
-                conn.execute("INSERT OR IGNORE INTO file_paths (path) VALUES (?)", (path,))
+            # Save files and relationships
+            for file_path in analysis.files_touched:
+                conn.execute("INSERT OR IGNORE INTO file_paths (path) VALUES (?)", (file_path,))
+                cursor = conn.execute("SELECT id FROM file_paths WHERE path = ?", (file_path,))
+                file_id = cursor.fetchone()[0]
                 conn.execute("""
                     INSERT OR IGNORE INTO session_files (session_id, file_id)
-                    SELECT ?, id FROM file_paths WHERE path = ?
-                """, (analysis.session_id, path))
-            
+                    VALUES (?, ?)
+                """, (analysis.session_id, file_id))
+
             if should_close:
                 conn.commit()
         finally:
@@ -212,38 +363,30 @@ class SQLiteStore:
                 conn.close()
 
     def save_insights(self, insights: SessionInsights, conn: Optional[sqlite3.Connection] = None):
-        """Save categorized insights for a session."""
+        """Save session insights."""
         should_close = False
         if conn is None:
             conn = self._get_connection()
             should_close = True
         
         try:
-            # Delete existing insights for this session
-            conn.execute("DELETE FROM session_insights WHERE session_id = ?", (insights.session_id,))
-            
             for insight in insights.insights:
                 conn.execute("""
-                    INSERT INTO session_insights 
-                    (session_id, category, content, importance, primary_theme, confidence)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO session_insights (
+                        session_id, category, content, importance, primary_theme, confidence
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                 """, (
-                    insights.session_id, 
-                    insight.category, 
-                    insight.content, 
-                    insight.importance,
-                    insights.primary_theme,
-                    insights.confidence
+                    insights.session_id, insight.category, insight.content,
+                    insight.importance, insight.primary_theme, insight.confidence
                 ))
-            
             if should_close:
                 conn.commit()
         finally:
             if should_close:
                 conn.close()
 
-    def save_correlation(self, result: CorrelationResult):
-        """Save cross-session synthesis result."""
+    def save_correlation(self, correlation: CorrelationResult):
+        """Save a correlation result and its linked sessions."""
         with self._get_connection() as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO correlations (
@@ -251,159 +394,57 @@ class SQLiteStore:
                     one_thing, one_thing_reasoning
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                result.id,
-                result.start_date.isoformat(),
-                result.end_date.isoformat(),
-                result.narrative,
-                json.dumps(result.workstreams),
-                json.dumps(result.next_actions),
-                result.one_thing,
-                result.one_thing_reasoning
+                correlation.id,
+                correlation.start_date.isoformat(),
+                correlation.end_date.isoformat(),
+                correlation.narrative,
+                json.dumps(correlation.workstreams),
+                json.dumps(correlation.next_actions),
+                correlation.one_thing,
+                correlation.one_thing_reasoning
             ))
 
-            for session_id in result.session_ids:
+            for session_id in correlation.session_ids:
                 conn.execute("""
                     INSERT OR IGNORE INTO correlation_sessions (correlation_id, session_id)
                     VALUES (?, ?)
-                """, (result.id, session_id))
+                """, (correlation.id, session_id))
+            conn.commit()
 
-    def update_indexing_status(self, session_id: str, status: str):
-        """Update the vector indexing status of a session."""
-        with self._get_connection() as conn:
-            conn.execute(
-                "UPDATE sessions SET indexing_status = ? WHERE id = ?",
-                (status, session_id)
-            )
+    def get_sessions(self, limit: int = 50, platform: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get list of sessions."""
+        query = "SELECT * FROM sessions"
+        params = []
+        if platform:
+            query += " WHERE platform = ?"
+            params.append(platform)
+        query += " ORDER BY started_at DESC LIMIT ?"
+        params.append(limit)
 
-    def get_failed_indexing_sessions(self) -> List[str]:
-        """Return a list of session IDs that failed to be indexed."""
         with self._get_connection() as conn:
-            rows = conn.execute(
-                "SELECT id FROM sessions WHERE indexing_status = 'failed'"
-            ).fetchall()
-            return [row['id'] for row in rows]
+            cursor = conn.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
 
-    def get_session(self, session_id: str) -> Optional[ParsedSession]:
-        """Retrieve a full session with messages and tool calls."""
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single session with its messages."""
         with self._get_connection() as conn:
-            row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            cursor = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
+            row = cursor.fetchone()
             if not row:
                 return None
             
-            # Fetch messages
-            msg_rows = conn.execute(
-                "SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp ASC",
-                (session_id,)
-            ).fetchall()
-            
-            messages = []
-            for m_row in msg_rows:
-                # Fetch tool calls for this message
-                tc_rows = conn.execute(
-                    "SELECT * FROM tool_calls WHERE message_id = ?",
-                    (m_row['id'],)
-                ).fetchall()
-                
-                tool_calls = [
-                    ToolCall(id=tc['id'], name=tc['name'], input=json.loads(tc['input']))
-                    for tc in tc_rows
-                ]
-                
-                messages.append(ParsedMessage(
-                    id=m_row['id'],
-                    session_id=session_id,
-                    type=m_row['type'],
-                    content=m_row['content'],
-                    thinking=m_row['thinking'],
-                    tool_calls=tool_calls,
-                    timestamp=datetime.fromisoformat(m_row['timestamp']) if isinstance(m_row['timestamp'], str) else m_row['timestamp'],
-                    parent_id=m_row['parent_id'],
-                    usage=json.loads(m_row['usage']) if m_row['usage'] else None
-                ))
+            session = dict(row)
+            cursor = conn.execute("SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp", (session_id,))
+            session['messages'] = [dict(r) for r in cursor.fetchall()]
+            return session
 
-            # Reconstruct SessionUsage
-            metadata = json.loads(row['metadata']) if row['metadata'] else {}
-            
-            return ParsedSession(
-                id=row['id'],
-                project_name=row['project_name'],
-                project_path=row['project_path'],
-                summary=json.loads(row['summary']) if row['summary'] else [],
-                generated_title=row['generated_title'],
-                started_at=datetime.fromisoformat(row['started_at']) if isinstance(row['started_at'], str) else row['started_at'],
-                ended_at=datetime.fromisoformat(row['ended_at']) if isinstance(row['ended_at'], str) else row['ended_at'],
-                message_count=row['message_count'],
-                git_branch=row['git_branch'],
-                source_tool=row['source_tool'],
-                claude_version=metadata.get("claude_version"),
-                messages=messages
-            )
-
-    def get_analysis(self, session_id: str) -> Optional[SessionAnalysis]:
-        """Retrieve saved analysis for a session."""
+    def search_sessions(self, query: str) -> List[Dict[str, Any]]:
+        """Simple keyword search across sessions and messages."""
         with self._get_connection() as conn:
-            # 1. Get base analysis
-            row = conn.execute(
-                "SELECT key_actions, analyzed_at FROM session_analysis WHERE session_id = ?", 
-                (session_id,)
-            ).fetchone()
-            if not row:
-                return None
-            
-            analyzed_at = datetime.fromisoformat(row['analyzed_at']) if isinstance(row['analyzed_at'], str) else row['analyzed_at']
-            key_actions = json.loads(row['key_actions']) if row['key_actions'] else []
-
-            # 2. Get topics
-            topics = []
-            topic_rows = conn.execute("""
-                SELECT t.name FROM topics t
-                JOIN session_topics st ON t.id = st.topic_id
-                WHERE st.session_id = ?
-            """, (session_id,)).fetchall()
-            topics = [r['name'] for r in topic_rows]
-
-            # 3. Get files
-            files = []
-            file_rows = conn.execute("""
-                SELECT f.path FROM file_paths f
-                JOIN session_files sf ON f.id = sf.file_id
-                WHERE sf.session_id = ?
-            """, (session_id,)).fetchall()
-            files = [r['path'] for r in file_rows]
-
-            return SessionAnalysis(
-                session_id=session_id,
-                topics=topics,
-                files_touched=files,
-                key_actions=key_actions,
-                analyzed_at=analyzed_at
-            )
-
-    def get_insights(self, session_id: str) -> Optional[SessionInsights]:
-        """Retrieve saved insights for a session."""
-        with self._get_connection() as conn:
-            rows = conn.execute("""
-                SELECT category, content, importance, primary_theme, confidence, generated_at 
-                FROM session_insights 
-                WHERE session_id = ?
-            """, (session_id,)).fetchall()
-            
-            if not rows:
-                return None
-            
-            insights_list = [
-                SessionInsight(
-                    category=row['category'],
-                    content=row['content'],
-                    importance=row['importance']
-                )
-                for row in rows
-            ]
-            
-            return SessionInsights(
-                session_id=session_id,
-                insights=insights_list,
-                primary_theme=rows[0]['primary_theme'],
-                confidence=rows[0]['confidence'],
-                generated_at=datetime.fromisoformat(rows[0]['generated_at']) if isinstance(rows[0]['generated_at'], str) else rows[0]['generated_at']
-            )
+            cursor = conn.execute("""
+                SELECT DISTINCT s.* FROM sessions s
+                JOIN messages m ON s.id = m.session_id
+                WHERE s.summary LIKE ? OR s.generated_title LIKE ? OR m.content LIKE ?
+                ORDER BY s.started_at DESC
+            """, (f"%{query}%", f"%{query}%", f"%{query}%"))
+            return [dict(row) for row in cursor.fetchall()]

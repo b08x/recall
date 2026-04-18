@@ -69,14 +69,21 @@ class MultiSourceCorrelator:
         # Run reconciliation for any failed indexing jobs from previous runs
         self.db.reconcile_failed_vectors()
 
-        # Dead Letter Queue for failed session processing
-        self.dlq: List[Dict[str, Any]] = []
-
     def estimate_session_tokens(self, sessions: List[ParsedSession]) -> int:
         """Estimate the total number of tokens across a list of sessions."""
         if not TIKTOKEN_AVAILABLE or not _TIKTOKEN_ENCODING:
-            # Fallback to rough character-based estimation (4 chars per token)
-            return sum(len(m.content or "") for s in sessions for m in s.messages) // 4
+            import re
+            # Better fallback: count words and non-whitespace symbols
+            # This is more accurate for code and structured data than simple char // 4
+            total = 0
+            for s in sessions:
+                for m in s.messages:
+                    content = m.content or ""
+                    # This regex matches words or non-whitespace characters
+                    tokens = re.findall(r"\w+|[^\w\s]", content)
+                    # Heuristic: tokens + 10% for some overhead/whitespace that might be meaningful
+                    total += int(len(tokens) * 1.1)
+            return total
 
         total = 0
         for s in sessions:
@@ -252,15 +259,16 @@ class MultiSourceCorrelator:
                         info(f"Successfully recovered session {session_id} on retry")
                     except Exception as retry_e:
                         error(f"Final failure for session {session_id}: {retry_e}")
-                        self.dlq.append({
-                            "payload": payload,
-                            "error": str(retry_e),
-                            "failed_at": datetime.now(timezone.utc).isoformat()
-                        })
+                        self.db.save_dlq_item(
+                            session_id=session_id,
+                            payload=payload,
+                            error_msg=str(retry_e)
+                        )
         
-        if self.dlq:
-            error(f"Extraction completed with {len(self.dlq)} items in Dead Letter Queue")
-            log_data("dlq_items", [item["payload"]["session"].id for item in self.dlq])
+        dlq_items = self.db.get_dlq_items()
+        if dlq_items:
+            error(f"Extraction completed with {len(dlq_items)} items in Dead Letter Queue")
+            log_data("dlq_items", [item["session_id"] for item in dlq_items])
         
         debug("Extraction all complete")
         if callback:
@@ -286,7 +294,7 @@ class MultiSourceCorrelator:
             since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
             
             # Check gh CLI
-            result = subprocess.run(["gh", "--version"], capture_output=True)
+            result = subprocess.run(["gh", "--version"], capture_output=True, timeout=30)
             if result.returncode != 0:
                 return {"commits": [], "pull_requests": []}
             
@@ -301,7 +309,7 @@ class MultiSourceCorrelator:
                 "--method", "GET",
                 "--field", f"since={since}Z",
                 "--jq", ".[] | {sha: .sha[0:7], message: .commit.message, date: .commit.author.date, author: .commit.author.name}"
-            ], capture_output=True, text=True, env=env)
+            ], capture_output=True, text=True, env=env, timeout=30)
             
             if result.returncode != 0:
                 error(f"GitHub API error: {result.stderr}")
@@ -386,6 +394,93 @@ class MultiSourceCorrelator:
         sorted_timeline = sorted(timeline, key=lambda x: x.get("timestamp") or datetime.min.replace(tzinfo=timezone.utc))
         debug(f"Timeline built with {len(sorted_timeline)} total events")
         return sorted_timeline
+
+    def retry_dlq(self, callback: Optional[callable] = None) -> List[Any]:
+        """Retry all failed sessions in the Dead Letter Queue."""
+        dlq_items = self.db.get_dlq_items()
+        if not dlq_items:
+            info("No items in DLQ to retry.")
+            return []
+
+        info(f"Retrying {len(dlq_items)} items from DLQ...")
+        results = []
+        
+        # Process items. Since they failed before, we process them sequentially for better error tracking.
+        for item in dlq_items:
+            dlq_id = item["id"]
+            payload = item["payload"]
+            session_id = item["session_id"]
+            
+            # Reconstruct ParsedSession if it was serialized as dict
+            # MultiSourceCorrelator expects ParsedSession object in payload["session"]
+            # if we want to reuse _process_single_session
+            
+            from recall.models import ParsedSession, ParsedMessage, SessionUsage, ToolCall, ToolResult
+            
+            def dict_to_session(d):
+                # Simple reconstruction
+                if not d: return None
+                msgs = []
+                for m in d.get("messages", []):
+                    msgs.append(ParsedMessage(
+                        id=m.get("id"),
+                        session_id=m.get("session_id"),
+                        type=m.get("type"),
+                        content=m.get("content"),
+                        thinking=m.get("thinking"),
+                        timestamp=datetime.fromisoformat(m["timestamp"]) if m.get("timestamp") else None,
+                        parent_id=m.get("parent_id"),
+                        usage=m.get("usage"),
+                        tool_calls=[ToolCall(**tc) for tc in m.get("tool_calls", [])],
+                        tool_results=[ToolResult(**tr) for tr in m.get("tool_results", [])]
+                    ))
+                
+                usage_data = d.get("usage")
+                usage = SessionUsage(**usage_data) if usage_data else None
+                
+                return ParsedSession(
+                    id=d["id"],
+                    project_path=d.get("project_path"),
+                    project_name=d.get("project_name"),
+                    started_at=datetime.fromisoformat(d["started_at"]) if d.get("started_at") else None,
+                    ended_at=datetime.fromisoformat(d["ended_at"]) if d.get("ended_at") else None,
+                    message_count=d.get("message_count", 0),
+                    user_message_count=d.get("user_message_count", 0),
+                    assistant_message_count=d.get("assistant_message_count", 0),
+                    tool_call_count=d.get("tool_call_count", 0),
+                    source_tool=d.get("source_tool", "unknown"),
+                    usage=usage,
+                    messages=msgs,
+                    generated_title=d.get("generated_title"),
+                    summary=d.get("summary"),
+                    git_branch=d.get("git_branch"),
+                    claude_version=d.get("claude_version")
+                )
+
+            session_obj = dict_to_session(payload.get("session"))
+            if not session_obj:
+                error(f"Could not reconstruct session {session_id} from DLQ payload")
+                continue
+
+            try:
+                self._process_single_session(
+                    session=session_obj,
+                    platform=payload.get("platform", "unknown"),
+                    analyze=payload.get("analyze", True),
+                    overwrite=payload.get("overwrite", False),
+                    analysis_model=payload.get("analysis_model"),
+                    insights_model=payload.get("insights_model"),
+                    insights_provider=payload.get("insights_provider"),
+                    callback=callback
+                )
+                info(f"Successfully processed DLQ item {session_id}")
+                self.db.delete_dlq_item(dlq_id)
+                results.append(session_id)
+            except Exception as e:
+                error(f"Retry failed for DLQ item {session_id}: {e}")
+                self.db.increment_dlq_retry(dlq_id)
+        
+        return results
 
     def configure_dspy(self, model: Optional[str] = None, provider: Optional[str] = None):
         """Configure DSPy with specified language model."""

@@ -58,6 +58,12 @@ def main():
     p_search.add_argument("--limit", type=int, default=5, help="Number of results")
     p_search.add_argument("--platform", help="Filter by platform (gemini, claude, etc.)")
     
+    # DLQ command
+    p_dlq = sub.add_parser("dlq", help="Manage Dead Letter Queue for failed extractions")
+    p_dlq.add_argument("--list", action="store_true", help="List items in DLQ")
+    p_dlq.add_argument("--retry", action="store_true", help="Retry items in DLQ")
+    p_dlq.add_argument("--clear", action="store_true", help="Clear all items from DLQ")
+    
     args = parser.parse_args()
     
     settings = Settings()
@@ -98,45 +104,33 @@ def main():
             date_range = {'start': cutoff, 'end': datetime.now(timezone.utc)}
             
             sessions_to_check = []
-            target_platforms = platforms or list(correlator.providers.keys())
-            for p in target_platforms:
-                if p in correlator.providers:
-                    sessions_to_check.extend(correlator.providers[p].extract(date_range))
+            for platform in (platforms or correlator.providers.keys()):
+                if platform in correlator.providers:
+                    files = correlator.providers[platform].discover(date_range)
+                    for f in files:
+                        s = correlator.providers[platform].parse(f)
+                        if s: sessions_to_check.append(s)
             
-            # Filter for sessions that actually need analysis
-            sessions_needing_analysis = []
-            if args.overwrite:
-                sessions_needing_analysis = sessions_to_check
-            else:
-                for s in sessions_to_check:
-                    if not correlator.db.get_analysis(s.id):
-                        sessions_needing_analysis.append(s)
+            token_count = correlator.estimate_session_tokens(sessions_to_check)
+            console.print(f"Estimated tokens for analysis: [bold]{token_count:,}[/bold]")
             
-            total_est = correlator.estimate_session_tokens(sessions_needing_analysis)
-            if total_est > settings.token_warning_threshold:
-                console.print(f"\n[bold yellow]⚠️  PRE-FLIGHT WARNING:[/bold yellow]")
-                console.print(f"Estimated tokens for analysis: [bold]{total_est:,}[/bold]")
-                console.print(f"Provider: [bold]{correlator.dspy_provider}[/bold]")
-                console.print(f"Threshold: {settings.token_warning_threshold:,}")
-                
-                confirm = input("\nProceed with analysis? (This may incur costs) [y/N]: ")
-                if confirm.lower() != 'y':
-                    console.print("[red]Aborted by user.[/red]")
+            # Simple threshold check
+            if token_count > 50000:
+                console.print("[yellow]Warning: High token count. Proceed? (y/n)[/yellow]")
+                if input().lower() != 'y':
                     sys.exit(0)
 
         results = correlator.extract_all(
             args.days, 
             platforms, 
             analyze=args.analyze, 
-            overwrite=args.overwrite, 
-            model=args.model,
+            overwrite=args.overwrite,
+            analysis_model=args.model,
             insights_model=args.insights_model,
             insights_provider=args.insights_provider
         )
         
-        output = {}
-        for platform, items in results.items():
-            output[platform] = [serialize_item(s) for s in items]
+        output = {p: [serialize_item(s) for s in sessions] for p, sessions in results.items()}
         
         if args.output:
             with open(args.output, "w") as f:
@@ -222,8 +216,51 @@ def main():
                 Markdown(documents[0]),
                 title=f"Session: {top_meta.get('session_id', 'unknown')}",
                 subtitle=f"Topics: {top_meta.get('topics', 'None')}",
-                border_style="bright_blue"
+                border_style="magenta"
             ))
+
+    elif args.command == "dlq":
+        if args.list:
+            items = correlator.db.get_dlq_items()
+            if not items:
+                console.print("[green]Dead Letter Queue is empty.[/green]")
+            else:
+                table = Table(title="Dead Letter Queue")
+                table.add_column("ID", style="cyan")
+                table.add_column("Session ID")
+                table.add_column("Platform")
+                table.add_column("Error", style="red")
+                table.add_column("Failed At")
+                table.add_column("Retries")
+                
+                for item in items:
+                    table.add_row(
+                        str(item["id"]),
+                        item["session_id"],
+                        item["payload"].get("platform", "unknown"),
+                        item["error"][:50] + "..." if len(item["error"]) > 50 else item["error"],
+                        item["failed_at"],
+                        str(item["retry_count"])
+                    )
+                console.print(table)
+        
+        elif args.retry:
+            results = correlator.retry_dlq()
+            if results:
+                console.print(f"[green]Successfully retried {len(results)} sessions.[/green]")
+            else:
+                console.print("[yellow]No sessions were successfully retried.[/yellow]")
+        
+        elif args.clear:
+            items = correlator.db.get_dlq_items()
+            for item in items:
+                correlator.db.delete_dlq_item(item["id"])
+            console.print(f"[green]Cleared {len(items)} items from DLQ.[/green]")
+        
+        else:
+            # Default to list
+            items = correlator.db.get_dlq_items()
+            console.print(f"DLQ contains {len(items)} items. Use --list, --retry, or --clear.")
 
 if __name__ == "__main__":
     main()

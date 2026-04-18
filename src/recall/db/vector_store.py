@@ -76,7 +76,13 @@ class OllamaEmbeddingFunction(EmbeddingFunction):
                     safe_text = text
             else:
                 # Fallback to naive truncation if tiktoken is missing
-                safe_text = text[:3000] if len(text) > 3000 else text
+                # Use a safe char-to-token ratio (3 chars/token) for conservative truncation
+                safe_chars = self.safe_limit * 3
+                if len(text) > safe_chars:
+                    debug(f"Truncating chunk {i} to {safe_chars} characters (tiktoken unavailable)")
+                    safe_text = text[:safe_chars]
+                else:
+                    safe_text = text
             
             embedding = _get_embedding(safe_text)
             embeddings.append(embedding)
