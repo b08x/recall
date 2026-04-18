@@ -25,13 +25,13 @@ The project follows a standard `src`-layout for modern Python packages:
   - `cli.py`: Command-line interface entry point.
   - `config.py`: Configuration management via `.env.local`.
   - `utils/`: Common utilities including `RateLimiter` and retry decorators.
-  - `models.py`: Unified dataclass and Pydantic models for sessions and messages.
+  - `models.py`: Unified dataclass and Pydantic models for sessions, messages, and insights.
   - `tui.py`: Rich-based dashboard and progress visualization.
   - `logging.py`: Centralized debug logging system.
-  - `ai/`: DSPy modules, signatures, and contextual chunking logic.
+  - `ai/`: DSPy modules, signatures, and contextual chunking logic. Includes `SessionInsightModule` for deep analysis.
   - `db/`: Persistence layer.
     - `manager.py`: Orchestrates SQL and Vector storage.
-    - `sqlite_store.py`: SQLite implementation for relational data.
+    - `sqlite_store.py`: SQLite implementation for relational data (sessions, topics, insights).
     - `vector_store.py`: ChromaDB implementation for semantic embeddings.
   - `providers/`: Specialized extractors for Gemini, Claude Code, Hermes, OpenCode, Obsidian, and Git.
 
@@ -66,7 +66,8 @@ Manage paths, API keys, and rate limits in `.env.local`. See `.env.local.example
   - Follow modern Python idioms and type hints.
   - Use absolute imports within the `recall` namespace.
 - **Logging**: Use the centralized `recall.logging` module (`debug`, `info`, `error`) to ensure logs are captured both in the log file and the TUI dashboard.
-- **Analysis Caching**: Session analysis (topics, files, actions) is cached in SQLite. Subsequent extractions will re-use this data unless the `--overwrite` flag is used.
+- **Analysis Caching**: Session analysis (topics, files, actions) and categorized insights are cached in SQLite. Subsequent extractions will re-use this data unless the `--overwrite` flag is used.
+- **Deep Insights**: Beyond basic topic extraction, the system generates categorized insights (Technical, Strategic, Procedural, etc.) using configurable models and providers.
 - **AI Logic**: All LLM interactions should be encapsulated within DSPy modules in `src/recall/ai/`.
 - **Validation**: After modifying core logic, verify both standard CLI output and TUI rendering integrity.
 
