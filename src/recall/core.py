@@ -388,7 +388,7 @@ class MultiSourceCorrelator:
                     api_key_val = os.environ.get(env_key)
                     lm = dspy.LM(f"{provider}/{model_id}", api_key=api_key_val, num_retries=self.settings.retry_max_attempts)
             
-            dspy.configure(lm=lm)
+            dspy.configure(lm=lm, adapter=dspy.ChatAdapter())
             return True
         except Exception:
             return False

@@ -10,7 +10,7 @@ Recall is a modern Python application designed for multi-platform session extrac
   - **uv**: Modern Python package and project manager.
   - **Rich**: Powers the terminal user interface (TUI) and dashboard.
   - **Pydantic / Pydantic-Settings**: Handles data modeling and decoupled configuration.
-  - **DSPy**: Powers the AI correlation and session analysis modules with **Pydantic-enforced TypedPredictors**.
+  - **DSPy**: Powers the AI correlation and session analysis modules with **Pydantic-enforced predictors**.
   - **Tenacity**: Provides robust exponential backoff retry logic for API interactions.
   - **SQLite**: Relational storage for sessions and insights with **transactional tracking**.
   - **ChromaDB**: Vector database for semantic search.
@@ -28,7 +28,7 @@ The project follows a standard `src`-layout for modern Python packages:
   - `models.py`: Unified dataclass and Pydantic models.
   - `tui.py`: Rich-based dashboard.
   - `logging.py`: Centralized debug logging system.
-  - `ai/`: DSPy modules and signatures using **TypedPredictor** for schema safety.
+  - `ai/`: DSPy modules and signatures using **Pydantic-aware predictors** for schema safety.
   - `db/`: Persistence layer with **Atomic Dual-Writes**.
     - `manager.py`: Orchestrates transactional SQL and Vector synchronization.
     - `sqlite_store.py`: SQLite implementation with **auto-migration** and indexing status tracking.

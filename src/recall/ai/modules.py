@@ -74,7 +74,7 @@ if DSPY_AVAILABLE:
 
         def __init__(self, max_chunk_chars: int = 12000):
             super().__init__()
-            self.extract_insights = dspy.TypedPredictor(SessionInsightExtractor)
+            self.extract_insights = dspy.Predict(SessionInsightExtractor)
             self.chunker = ContextualChunker(max_chunk_chars=max_chunk_chars)
             self.limiter = get_default_limiter()
 
@@ -125,7 +125,7 @@ if DSPY_AVAILABLE:
         def __init__(self):
             super().__init__()
             self.correlate_commits = dspy.Predict(CommitSessionCorrelator)
-            self.synthesize = dspy.TypedPredictor(TimelineSynthesizer)
+            self.synthesize = dspy.Predict(TimelineSynthesizer)
             self.one_thing = dspy.ChainOfThought(OneThingGenerator)
             self.limiter = get_default_limiter()
 
@@ -133,7 +133,7 @@ if DSPY_AVAILABLE:
             # Stage 1: Synthesize timeline
             self.limiter.wait()
             
-            # Use TypedPredictor which expects Pydantic models for TimelineSynthesizer
+            # Use Predict which expects Pydantic models for TimelineSynthesizer
             timeline_result = self.synthesize(
                 sessions=sessions,
                 commits=commits,

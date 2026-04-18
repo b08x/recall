@@ -6,7 +6,7 @@ Recall is a multi-platform session extraction and correlation tool. It gathers c
 
 - **Transactional Dual-Writes**: Atomic synchronization between relational SQLite data and ChromaDB vector chunks.
 - **Cost Management**: Integrated **Pre-flight Token Estimation** using `tiktoken` with user confirmation thresholds to prevent API cost overruns.
-- **Schema Safety**: Uses **DSPy TypedPredictors** and strict Pydantic models for AI-generated insights, ensuring output consistency.
+- **Schema Safety**: Uses **DSPy Pydantic-aware Predictors** and strict models for AI-generated insights, ensuring output consistency.
 - **Precise Windowing**: Token-aware context management in the vector store to maximize input quality without backend failures.
 - **Auto-Migration**: Self-healing SQLite schema that automatically handles database updates.
 - **Robustness**: Built-in conservative rate limiting and exponential backoff retries for all AI and GitHub API interactions.
