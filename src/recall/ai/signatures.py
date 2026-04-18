@@ -10,26 +10,31 @@ if DSPY_AVAILABLE:
     class SessionTopicExtractor(dspy.Signature):
         """Extract primary topics and activities from session content.
         
-        Analyzes session messages to identify the main areas of work,
-        files that were touched, and key actions taken during the session.
+        Identifies the core areas of work, modified files, and kinetic actions.
+        Differentiates between 'thinking' and 'doing' based on tool usage and output.
         """
         
-        session_content: str = dspy.InputField(desc="Combined text content from session messages, truncated to key exchanges")
-        topics: List[str] = dspy.OutputField(desc="List of 3-5 main topics/activities in the session, prioritized by time spent")
-        files_touched: List[str] = dspy.OutputField(desc="File paths mentioned or modified during the session")
-        key_actions: List[str] = dspy.OutputField(desc="Key actions taken (commits, edits, tests run, bugs fixed)")
+        session_content: str = dspy.InputField(desc="Combined text content from session messages")
+        context_metadata: str = dspy.InputField(desc="Platform, project, and temporal context")
+        topics: List[str] = dspy.OutputField(desc="List of 3-5 main topics/activities, ranked by importance")
+        files_touched: List[str] = dspy.OutputField(desc="File paths actually modified or deeply analyzed")
+        key_actions: List[str] = dspy.OutputField(desc="Key kinetic actions (commits, tests run, specific fixes)")
 
 
     class SessionInsightExtractor(dspy.Signature):
         """Extract categorized insights from session content.
         
-        Analyzes session messages to find deeper insights like architectural 
-        decisions, technical debt, blockers, or process improvements.
+        Identifies deep patterns including:
+        - TECHNICAL: Architecture decisions, refactoring, code quality.
+        - PROCEDURAL: Workflow changes, tool usage, process improvements.
+        - STRATEGIC: Product direction, priority shifts, goal alignment.
+        - BLOCKER: Technical debt, missing dependencies, postponed work.
         """
         
         session_content: str = dspy.InputField(desc="Combined text content from session messages")
-        insights: List[Dict[str, Any]] = dspy.OutputField(desc="List of objects with keys: category, content, importance (0.0-1.0)")
-        primary_theme: str = dspy.OutputField(desc="The core theme of this specific insight set")
+        context_metadata: str = dspy.InputField(desc="Platform, project, and temporal context for this session")
+        insights: List[Dict[str, Any]] = dspy.OutputField(desc="List of objects with keys: 'category' (TECHNICAL|PROCEDURAL|STRATEGIC|BLOCKER), 'content' (detailed insight), and 'importance' (0.0-1.0 score based on impact)")
+        primary_theme: str = dspy.OutputField(desc="The core theme unifying these specific insights")
         confidence: float = dspy.OutputField(desc="Overall confidence in the insight extraction (0.0-1.0)")
 
 

@@ -16,32 +16,42 @@ from .chunking import ContextualChunker
 from recall.logging import debug, info, error
 from recall.utils.limiter import get_default_limiter
 
-if DSPY_AVAILABLE:
-    class SessionAnalysisModule(dspy.Module):
-        """Analyze sessions using contextual chunking to extract topics and actions."""
+class SessionAnalysisModule(dspy.Module):
+    """Analyze sessions using contextual chunking to extract topics and actions."""
 
-        def __init__(self, max_chunk_chars: int = 8000):
-            super().__init__()
-            self.extract_topics = dspy.ChainOfThought(SessionTopicExtractor)
-            self.chunker = ContextualChunker(max_chunk_chars=max_chunk_chars)
-            self.limiter = get_default_limiter()
+    def __init__(self, max_chunk_chars: int = 8000):
+        super().__init__()
+        self.extract_topics = dspy.ChainOfThought(SessionTopicExtractor)
+        self.chunker = ContextualChunker(max_chunk_chars=max_chunk_chars)
+        self.limiter = get_default_limiter()
 
-        def forward(self, session: Any) -> Dict[str, Any]:
-            """Process a session through contextual chunking and topic extraction."""
-            debug(f"Chunking session {getattr(session, 'id', 'unknown')}")
-            chunks = self.chunker.chunk_session(session)
-            debug(f"Session split into {len(chunks)} chunks")
-            
-            all_topics = set()
-            all_files = set()
-            all_actions = set()
+    def forward(self, session: Any) -> Dict[str, Any]:
+        """Process a session through contextual chunking and topic extraction."""
+        debug(f"Chunking session {getattr(session, 'id', 'unknown')}")
 
-            for i, chunk in enumerate(chunks):
-                debug(f"Processing chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
-                try:
-                    self.limiter.wait()
-                    result = self.extract_topics(session_content=chunk)
-                    if result:
+        # Construct metadata for context
+        platform = getattr(session, 'source_tool', 'unknown')
+        project = getattr(session, 'project_name', 'unknown')
+        started = getattr(session, 'started_at', datetime.now(timezone.utc)).isoformat()
+        metadata = f"Platform: {platform} | Project: {project} | Date: {started}"
+
+        chunks = self.chunker.chunk_session(session)
+        debug(f"Session split into {len(chunks)} chunks")
+
+        all_topics = set()
+        all_files = set()
+        all_actions = set()
+
+        for i, chunk in enumerate(chunks):
+            debug(f"Processing chunk {i+1}/{len(chunks)} ({len(chunk)} chars)")
+            try:
+                self.limiter.wait()
+                result = self.extract_topics(
+                    session_content=chunk,
+                    context_metadata=metadata
+                )
+                if result:
+...
                         if hasattr(result, 'topics'):
                             debug(f"Chunk {i+1} topics: {result.topics}")
                             all_topics.update(result.topics)
@@ -71,8 +81,14 @@ if DSPY_AVAILABLE:
         def forward(self, session: Any) -> Dict[str, Any]:
             """Generate insights from session content."""
             debug(f"Extracting insights for session {getattr(session, 'id', 'unknown')}")
-            chunks = self.chunker.chunk_session(session)
             
+            # Construct metadata for context
+            platform = getattr(session, 'source_tool', 'unknown')
+            project = getattr(session, 'project_name', 'unknown')
+            started = getattr(session, 'started_at', datetime.now(timezone.utc)).isoformat()
+            metadata = f"Platform: {platform} | Project: {project} | Date: {started}"
+            
+            chunks = self.chunker.chunk_session(session)
             all_insights = []
             themes = []
             confidences = []
@@ -80,7 +96,10 @@ if DSPY_AVAILABLE:
             for i, chunk in enumerate(chunks):
                 try:
                     self.limiter.wait()
-                    result = self.extract_insights(session_content=chunk)
+                    result = self.extract_insights(
+                        session_content=chunk, 
+                        context_metadata=metadata
+                    )
                     if result:
                         if hasattr(result, 'insights'):
                             all_insights.extend(result.insights)
