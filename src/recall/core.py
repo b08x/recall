@@ -13,9 +13,13 @@ from recall.providers.claude_code import ClaudeCodeProvider
 from recall.providers.opencode import OpenCodeProvider
 from recall.providers.obsidian import ObsidianProvider
 from recall.providers.local_git import LocalGitProvider
-from recall.ai.modules import SessionAnalysisModule, SessionInsightModule, CorrelationModule
+from recall.ai.modules import SessionAnalysisModule, SessionInsightModule, CorrelationModule, ContextEnhancementModule
 from recall.db import PersistenceManager
-from recall.models import ParsedSession, ParsedNote, SessionAnalysis, SessionInsight, SessionInsights, CorrelationResult
+from recall.models import (
+    ParsedSession, ParsedNote, SessionAnalysis, SessionInsight, SessionInsights, CorrelationResult,
+    EnhancedSessionInsights, ContextMatch
+)
+from recall.context import create_context_manager
 from recall.config import Settings
 from recall.logging import debug, info, error, step, log_metric, log_data
 from recall.utils.limiter import get_limiter, get_retry_decorator, rate_limited, set_global_rpm
@@ -66,6 +70,9 @@ class MultiSourceCorrelator:
         self.dspy_provider = self.settings.dspy_provider
         self.dspy_model = self.settings.dspy_model
 
+        # Context enhancement manager
+        self.context_manager = create_context_manager(self.settings) if self.settings.enable_context_enhancement else None
+
         # Run reconciliation for any failed indexing jobs from previous runs
         self.db.reconcile_failed_vectors()
 
@@ -91,14 +98,15 @@ class MultiSourceCorrelator:
                 total += len(_TIKTOKEN_ENCODING.encode(m.content or ""))
         return total
 
-    def _process_single_session(self, 
-                               session: ParsedSession, 
+    def _process_single_session(self,
+                               session: ParsedSession,
                                platform: str,
-                               analyze: bool, 
-                               overwrite: bool, 
-                               analysis_model: str, 
-                               insights_model: str, 
+                               analyze: bool,
+                               overwrite: bool,
+                               analysis_model: str,
+                               insights_model: str,
                                insights_provider: str,
+                               enhance_with_context: bool = False,
                                callback: Optional[callable] = None):
         """Analyze and persist a single session. Designed to be run in a thread pool."""
         analysis_obj = None
@@ -161,6 +169,41 @@ class MultiSourceCorrelator:
                     confidence=insight_data.get("confidence", 0.0),
                     generated_at=datetime.now(timezone.utc)
                 )
+
+                # 3. Optional Context Enhancement
+                if enhance_with_context and self.context_manager and insight_obj:
+                    debug(f"Enhancing insights for session {session.id}")
+                    try:
+                        # Note: This is a sync wrapper around async context enhancement
+                        # In a production system, you might want to use asyncio.run or similar
+                        import asyncio
+                        try:
+                            # Try to get existing event loop
+                            loop = asyncio.get_event_loop()
+                            if loop.is_running():
+                                # If loop is already running, we can't use asyncio.run
+                                # For now, we'll skip enhancement in this case
+                                debug("Event loop already running, skipping context enhancement")
+                            else:
+                                enhanced_insights = loop.run_until_complete(
+                                    self.analyze_session_insights_enhanced(session, insight_obj, insights_model, insights_provider)
+                                )
+                                if enhanced_insights:
+                                    debug(f"Successfully enhanced insights for session {session.id}")
+                                    # Store both base and enhanced insights
+                                    # For now, we'll use the enhanced insights as the primary object
+                                    # This could be extended to store both separately
+                        except RuntimeError:
+                            # No event loop exists, safe to create one
+                            enhanced_insights = asyncio.run(
+                                self.analyze_session_insights_enhanced(session, insight_obj, insights_model, insights_provider)
+                            )
+                            if enhanced_insights:
+                                debug(f"Successfully enhanced insights for session {session.id}")
+
+                    except Exception as e:
+                        error(f"Context enhancement failed for session {session.id}: {e}")
+                        debug("Continuing with base insights only")
         else:
             debug(f"Skipping analysis for session {session.id} (analyze=False)")
         
@@ -171,13 +214,14 @@ class MultiSourceCorrelator:
         except Exception as e:
             error(f"Failed to persist session {session.id}: {e}")
 
-    def extract_all(self, days: int = 7, 
+    def extract_all(self, days: int = 7,
                     platforms: Optional[List[str]] = None,
                     analyze: bool = False,
                     overwrite: bool = False,
                     model: Optional[str] = None,
                     insights_model: Optional[str] = None,
                     insights_provider: Optional[str] = None,
+                    enhance_with_context: bool = False,
                     callback: Optional[callable] = None) -> Dict[str, List[Any]]:
         """
         Extract sessions and notes from all platforms and persist them.
@@ -232,12 +276,14 @@ class MultiSourceCorrelator:
                         "overwrite": overwrite,
                         "analysis_model": analysis_model,
                         "insights_model": insights_model,
-                        "insights_provider": insights_provider
+                        "insights_provider": insights_provider,
+                        "enhance_with_context": enhance_with_context
                     }
                     future = executor.submit(
                         self._process_single_session,
                         session, platform, analyze, overwrite,
-                        analysis_model, insights_model, insights_provider, callback
+                        analysis_model, insights_model, insights_provider,
+                        enhance_with_context, callback
                     )
                     future_to_session[future] = payload
             
@@ -565,7 +611,74 @@ class MultiSourceCorrelator:
             error(f"Error in SessionInsightModule: {e}")
             return {"insights": [], "primary_theme": "General", "confidence": 0.0}
 
-    def correlate_with_dspy(self, timeline: List[Dict], model: Optional[str] = None) -> Dict:
+    async def analyze_session_insights_enhanced(self, session: ParsedSession, base_insights: SessionInsights,
+                                              model: Optional[str] = None, provider: Optional[str] = None) -> Optional[EnhancedSessionInsights]:
+        """Use context enhancement to enrich session insights."""
+
+        if not self.context_manager or not self.settings.enable_context_enhancement:
+            debug("Context enhancement not enabled")
+            return None
+
+        debug(f"Enhancing insights for session {session.id}")
+
+        # Prepare session context
+        session_context = {
+            "session_date": session.started_at,
+            "project_path": session.project_path,
+            "project_name": session.project_name,
+            "files_touched": getattr(base_insights, 'files_touched', []),
+            "topics": [insight.category for insight in base_insights.insights]
+        }
+
+        try:
+            enhanced_insights = await self.context_manager.enhance_insights(base_insights, session_context)
+            if enhanced_insights:
+                debug(f"Successfully enhanced insights for session {session.id}")
+                return enhanced_insights
+            else:
+                debug(f"No enhancement available for session {session.id}")
+                return None
+        except Exception as e:
+            error(f"Failed to enhance insights for session {session.id}: {e}")
+            return None
+
+    def enhance_insights_with_dspy(self, base_insights: Dict[str, Any], context_matches: List[Dict[str, Any]],
+                                  session_metadata: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
+        """Use DSPy ContextEnhancementModule to enhance insights."""
+
+        if not DSPY_AVAILABLE or not context_matches:
+            debug("DSPy not available or no context matches for enhancement")
+            return None
+
+        debug(f"Enhancing insights with DSPy using {len(context_matches)} context matches")
+
+        try:
+            enhancer = ContextEnhancementModule()
+            enhancer.limiter = get_limiter("context_enhancement")
+
+            # Convert context matches to the expected format
+            formatted_matches = []
+            for match in context_matches:
+                if isinstance(match, ContextMatch):
+                    formatted_matches.append({
+                        "source_type": match.source_type,
+                        "content": match.content,
+                        "relevance_score": match.relevance_score,
+                        "match_reasons": match.match_reasons
+                    })
+                elif isinstance(match, dict):
+                    formatted_matches.append(match)
+
+            enhancer.limiter.wait()
+            result = enhancer.forward(base_insights, formatted_matches, session_metadata or {})
+            debug(f"DSPy enhancement completed")
+            return result
+
+        except Exception as e:
+            error(f"Error in DSPy insight enhancement: {e}")
+            return None
+
+    def correlate_with_dspy(self, timeline: List[Dict], model: Optional[str] = None, context_summary: Optional[str] = None) -> Dict:
         """Use DSPy to generate correlated narrative and next actions."""
         debug(f"Correlating {len(timeline)} events with DSPy")
         if not DSPY_AVAILABLE or not self.configure_dspy(model):
@@ -596,12 +709,48 @@ class MultiSourceCorrelator:
         
         try:
             correlator.limiter.wait()
-            result = correlator(sessions=sessions, commits=commits, file_changes=[])
+            result = correlator(
+                sessions=sessions,
+                commits=commits,
+                file_changes=[],
+                context_summary=context_summary
+            )
             debug("DSPy correlation successful")
             return result
         except Exception as e:
             error(f"Error during DSPy correlation: {e}")
             return self._heuristic_correlation(timeline)
+
+    def _extract_context_summary_from_timeline(self, timeline: List[Dict]) -> Optional[str]:
+        """Extract context summary from enhanced insights in timeline."""
+
+        context_elements = []
+
+        # Look for enhanced insights in timeline sessions
+        for event in timeline:
+            if event.get("type") == "session" and "enhanced_insights" in event.get("data", {}):
+                enhanced_data = event["data"]["enhanced_insights"]
+
+                # Extract knowledge gaps filled
+                gaps_filled = enhanced_data.get("knowledge_gaps_filled", [])
+                if gaps_filled:
+                    context_elements.append(f"Knowledge gaps addressed: {', '.join(gaps_filled[:3])}")
+
+                # Extract context sources used
+                metadata = enhanced_data.get("enhancement_metadata", {})
+                sources_used = metadata.get("sources_used", [])
+                if sources_used:
+                    context_elements.append(f"Context sources: {', '.join(sources_used)}")
+
+                # Extract strategic recommendations
+                recommendations = enhanced_data.get("strategic_recommendations", [])
+                if recommendations:
+                    context_elements.append(f"Strategic patterns: {', '.join(recommendations[:2])}")
+
+        if context_elements:
+            return "; ".join(context_elements)
+
+        return None
 
     def _heuristic_correlation(self, timeline: List[Dict]) -> Dict:
         """Fallback heuristic-based correlation."""

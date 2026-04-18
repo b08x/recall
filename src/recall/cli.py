@@ -42,6 +42,8 @@ def main():
     p_extract.add_argument("--model", help="DSPy model identifier for general analysis")
     p_extract.add_argument("--insights-model", help="DSPy model identifier for deep insight extraction")
     p_extract.add_argument("--insights-provider", help="DSPy provider for deep insight extraction")
+    p_extract.add_argument("--enhance-context", action="store_true",
+                          help="Enhance insights using context from Obsidian and Git sources")
     p_extract.add_argument("--output", help="Output JSON file")
     
     # Correlate command
@@ -51,6 +53,8 @@ def main():
     p_correlate.add_argument("--model", help="DSPy model identifier")
     p_correlate.add_argument("--output", help="Output JSON file")
     p_correlate.add_argument("--overwrite", action="store_true", help="Overwrite existing analysis in the database")
+    p_correlate.add_argument("--enhance-context", action="store_true",
+                           help="Enhance correlation with context from Obsidian and Git sources")
     
     # Search command
     p_search = sub.add_parser("search", help="Semantic search over saved sessions")
@@ -82,11 +86,19 @@ def main():
         
         if args.command == "extract":
             platforms = args.platforms.split(",") if args.platforms else None
-            tui.display_extraction_progress(correlator, args.days, platforms, args.analyze, args.overwrite)
+            enhance_context = getattr(args, 'enhance_context', False)
+            tui.display_extraction_progress(correlator, args.days, platforms, args.analyze, args.overwrite, enhance_context)
         
         elif args.command == "correlate":
             platforms = None # Default all
-            sessions = correlator.extract_all(args.days, platforms, overwrite=getattr(args, 'overwrite', False))
+            enhance_context = getattr(args, 'enhance_context', False)
+            sessions = correlator.extract_all(
+                args.days,
+                platforms,
+                analyze=True,
+                overwrite=getattr(args, 'overwrite', False),
+                enhance_with_context=enhance_context
+            )
             tui.display_correlation(correlator, sessions, args.days, args.github_repo)
             
         sys.exit(0)
@@ -121,13 +133,14 @@ def main():
                     sys.exit(0)
 
         results = correlator.extract_all(
-            args.days, 
-            platforms, 
-            analyze=args.analyze, 
+            args.days,
+            platforms,
+            analyze=args.analyze,
             overwrite=args.overwrite,
-            analysis_model=args.model,
+            model=args.model,
             insights_model=args.insights_model,
-            insights_provider=args.insights_provider
+            insights_provider=args.insights_provider,
+            enhance_with_context=getattr(args, 'enhance_context', False)
         )
         
         output = {p: [serialize_item(s) for s in sessions] for p, sessions in results.items()}
@@ -140,7 +153,11 @@ def main():
             print(json.dumps(output, indent=2))
     
     elif args.command == "correlate":
-        sessions = correlator.extract_all(args.days)
+        sessions = correlator.extract_all(
+            args.days,
+            analyze=True,  # Correlation requires analysis
+            enhance_with_context=getattr(args, 'enhance_context', False)
+        )
         
         github_data = None
         if args.github_repo:
