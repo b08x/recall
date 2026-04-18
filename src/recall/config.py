@@ -1,7 +1,8 @@
-from typing import Optional, List
-from pydantic import SecretStr, Field
+from typing import Optional, List, Any, Union
+from pydantic import SecretStr, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
+import json
 
 class Settings(BaseSettings):
     """Configuration settings for the recall package."""
@@ -52,7 +53,7 @@ class Settings(BaseSettings):
 
     # Context Enhancement Settings
     enable_context_enhancement: bool = Field(default=True, description="Enable context enhancement of session insights")
-    context_sources: List[str] = Field(default=["obsidian", "git"], description="List of enabled context sources")
+    context_sources: Union[List[str], str] = Field(default=["obsidian", "git"], description="List of enabled context sources")
     max_context_matches_per_source: int = Field(default=3, description="Maximum context matches per source")
     context_relevance_threshold: float = Field(default=0.7, description="Minimum relevance score for context matches")
     context_enhancement_timeout: float = Field(default=30.0, description="Timeout for context enhancement in seconds")
@@ -62,6 +63,20 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore"
     )
+
+    @field_validator("context_sources", mode="before")
+    @classmethod
+    def parse_context_sources(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            if not v.strip():
+                return []
+            if v.startswith("[") and v.endswith("]"):
+                try:
+                    return json.loads(v)
+                except json.JSONDecodeError:
+                    pass
+            return [s.strip() for s in v.split(",") if s.strip()]
+        return v
 
     @property
     def resolved_notebook_path(self) -> Path:
