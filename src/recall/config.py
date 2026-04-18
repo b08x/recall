@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     retry_min_wait: float = Field(default=1.0, description="Minimum wait time between retries (seconds)")
     retry_max_wait: float = Field(default=60.0, description="Maximum wait time between retries (seconds)")
     requests_per_minute: int = Field(default=20, description="Conservative rate limit (requests per minute)")
+    token_warning_threshold: int = Field(default=100000, description="Threshold for token count warning before LLM analysis")
     
     model_config = SettingsConfigDict(
         env_file=".env.local",

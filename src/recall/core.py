@@ -55,6 +55,21 @@ class MultiSourceCorrelator:
         self.dspy_provider = self.settings.dspy_provider
         self.dspy_model = self.settings.dspy_model
         
+    def estimate_session_tokens(self, sessions: List[ParsedSession]) -> int:
+        """Estimate the total number of tokens across a list of sessions."""
+        try:
+            import tiktoken
+            encoding = tiktoken.get_encoding("cl100k_base")
+        except ImportError:
+            # Fallback to rough character-based estimation (4 chars per token)
+            return sum(len(m.content or "") for s in sessions for m in s.messages) // 4
+
+        total = 0
+        for s in sessions:
+            for m in s.messages:
+                total += len(encoding.encode(m.content or ""))
+        return total
+
     def extract_all(self, days: int = 7, 
                     platforms: Optional[List[str]] = None,
                     analyze: bool = False,
