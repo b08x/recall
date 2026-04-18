@@ -13,8 +13,8 @@ class PersistenceManager:
                  db_path: str = "recall.db", 
                  vector_dir: str = "./chroma_db",
                  ollama_host: str = "http://tinybot:11434",
-                 ollama_model: str = "embeddinggemma",
-                 embedding_max_tokens: int = 768,
+                 ollama_model: str = "snowflake-arctic-embed2:568m",
+                 embedding_max_tokens: int = 8192,
                  chunk_max_chars: int = 6000):
         
         self.sqlite = SQLiteStore(db_path)

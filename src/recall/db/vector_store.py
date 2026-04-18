@@ -26,7 +26,7 @@ except ImportError:
 class OllamaEmbeddingFunction(EmbeddingFunction):
     """Custom embedding function for Ollama's embedding models with safety truncation."""
     
-    def __init__(self, host: str = "http://tinybot:11434", model: str = "embeddinggemma", max_tokens: int = 768):
+    def __init__(self, host: str = "http://tinybot:11434", model: str = "snowflake-arctic-embed2:568m", max_tokens: int = 8192):
         self.host = host
         self.model = model
         self.max_tokens = max_tokens
@@ -99,8 +99,8 @@ class VectorStore:
                  collection_name: str = "recall_sessions", 
                  persist_directory: str = "./chroma_db",
                  ollama_host: str = "http://tinybot:11434",
-                 ollama_model: str = "embeddinggemma",
-                 max_tokens: int = 768):
+                 ollama_model: str = "snowflake-arctic-embed2:568m",
+                 max_tokens: int = 8192):
         
         if not CHROMA_AVAILABLE:
             debug("ChromaDB not available. Semantic features will be disabled.")

@@ -14,7 +14,7 @@ Recall is a multi-platform session extraction and correlation tool. It gathers c
 - **Safety-First Windowing**: Conservative chunking and token-aware context management with **built-in safety buffers** to maximize input quality and prevent local model failures.
 - **Auto-Migration**: Self-healing SQLite schema that automatically handles database updates.
 - **Robustness**: Built-in conservative rate limiting and exponential backoff retries for all AI and GitHub API interactions.
-- **Semantic Search**: Leverage ChromaDB and Ollama (`embeddinggemma`) to find sessions based on meaning, not just keywords.
+- **Semantic Search**: Leverage ChromaDB and Ollama (`snowflake-arctic-embed2:568m`) to find sessions based on meaning, not just keywords.
 - **Persistent Data Layer**: Automatic storage of all sessions, messages, and AI-driven analyses in a local SQLite database with full object reconstruction.
 - **Git Correlation**: Match AI sessions with local and remote Git commits to see code changes in context.
 - **Obsidian Integration**: Include relevant notes from your personal knowledge base.

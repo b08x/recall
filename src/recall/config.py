@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     
     # Embedding Settings
     ollama_host: str = Field(default="http://tinybot:11434", description="Host for Ollama embedding service")
-    embedding_model: str = Field(default="embeddinggemma", description="Ollama model for embeddings")
-    embedding_max_tokens: int = Field(default=768, description="Maximum tokens for local embedding models")
+    embedding_model: str = Field(default="snowflake-arctic-embed2:568m", description="Ollama model for embeddings")
+    embedding_max_tokens: int = Field(default=8192, description="Maximum tokens for local embedding models")
     chunk_max_chars: int = Field(default=6000, description="Conservative character limit for text chunking")
     
     # API Keys

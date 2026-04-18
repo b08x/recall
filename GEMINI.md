@@ -14,10 +14,9 @@ Recall is a modern Python application designed for multi-platform session extrac
   - **Tenacity**: Provides robust exponential backoff retry logic for API interactions.
   - **SQLite**: Relational storage for sessions and insights with **transactional tracking**.
   - **ChromaDB**: Vector database for semantic search.
-  - **Ollama / tiktoken**: Local embeddings with **precise token-window management**.
+  - **Ollama / tiktoken**: Local embeddings using **snowflake-arctic-embed2:568m** with a **8192 token context window** and precise token management.
 
-## Architecture & Structure
-
+  ## Architecture & Structure
 The project follows a standard `src`-layout for modern Python packages:
 
 - `src/recall/`: Core package directory.
