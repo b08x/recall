@@ -139,9 +139,62 @@ class MultiSourceCorrelator:
 
                         # 2. Insight Extraction
                         insight_data = self.analyze_session_insights(session, model=insights_model, provider=insights_provider)
+                        
+                        valid_insights = []
+                        for i in insight_data.get("insights", []):
+                            if isinstance(i, dict):
+                                # Filter only valid keys for SessionInsight and ensure types are correct
+                                try:
+                                    # Extract core fields, providing defaults if missing
+                                    category = str(i.get("category", "General")).upper()
+                                    content = str(i.get("content", ""))
+                                    
+                                    # Handle case where LLM might have put content in a weird key or it's missing
+                                    if not content:
+                                        potential_content = []
+                                        for k, v in i.items():
+                                            if k in ["category", "importance"]:
+                                                continue
+                                            
+                                            # Collect long strings from both keys and values
+                                            if isinstance(k, str) and len(k) > 50:
+                                                potential_content.append(k)
+                                            if isinstance(v, str) and len(v) > 50:
+                                                potential_content.append(v)
+                                        
+                                        if potential_content:
+                                            # Join them together as they might be parts of the same insight
+                                            content = " ".join(potential_content).strip()
+                                    
+                                    if not content:
+                                        # One last try: if there's only one extra key and it has a value, use it
+                                        extra_keys = [k for k in i.keys() if k not in ["category", "importance", "content"]]
+                                        if len(extra_keys) == 1:
+                                            k = extra_keys[0]
+                                            v = i[k]
+                                            content = f"{k}: {v}" if isinstance(v, (str, int, float)) else k
+                                    
+                                    if not content:
+                                        continue
+                                        
+                                    importance = i.get("importance", 0.5)
+                                    try:
+                                        importance = float(importance)
+                                    except (ValueError, TypeError):
+                                        importance = 0.5
+                                        
+                                    valid_insights.append(SessionInsight(
+                                        category=category,
+                                        content=content,
+                                        importance=importance
+                                    ))
+                                except Exception as e:
+                                    debug(f"Skipping malformed insight: {e}")
+                                    continue
+
                         insight_obj = SessionInsights(
                             session_id=session.id,
-                            insights=[SessionInsight(**i) for i in insight_data.get("insights", [])],
+                            insights=valid_insights,
                             primary_theme=insight_data.get("primary_theme", "General"),
                             confidence=insight_data.get("confidence", 0.0),
                             generated_at=datetime.now(timezone.utc)

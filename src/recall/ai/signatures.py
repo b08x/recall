@@ -25,15 +25,21 @@ if DSPY_AVAILABLE:
         """Extract categorized insights from session content.
         
         Identifies deep patterns including:
-        - TECHNICAL: Architecture decisions, refactoring, code quality.
-        - PROCEDURAL: Workflow changes, tool usage, process improvements.
-        - STRATEGIC: Product direction, priority shifts, goal alignment.
-        - BLOCKER: Technical debt, missing dependencies, postponed work.
+        - TECHNICAL: Architecture decisions, refactoring, code quality, technical debt.
+        - PROCEDURAL: Workflow changes, tool usage, process improvements, habits.
+        - STRATEGIC: Product direction, priority shifts, goal alignment, long-term vision.
+        - BLOCKER: Technical debt, missing dependencies, postponed work, external delays.
+
+        STRICT SCHEMA FOR INSIGHTS:
+        Each insight in the list MUST be a dictionary with EXACTLY these keys:
+        - 'category': One of [TECHNICAL, PROCEDURAL, STRATEGIC, BLOCKER]
+        - 'content': A concise but descriptive string (2-3 sentences)
+        - 'importance': A float between 0.0 and 1.0
         """
         
         session_content: str = dspy.InputField(desc="Combined text content from session messages")
         context_metadata: str = dspy.InputField(desc="Platform, project, and temporal context for this session")
-        insights: List[Dict[str, Any]] = dspy.OutputField(desc="List of objects with keys: 'category' (TECHNICAL|PROCEDURAL|STRATEGIC|BLOCKER), 'content' (detailed insight), and 'importance' (0.0-1.0 score based on impact)")
+        insights: List[Dict[str, Any]] = dspy.OutputField(desc="List of categorized insight objects. Each MUST have 'category', 'content', and 'importance' keys.")
         primary_theme: str = dspy.OutputField(desc="The core theme unifying these specific insights")
         confidence: float = dspy.OutputField(desc="Overall confidence in the insight extraction (0.0-1.0)")
 
