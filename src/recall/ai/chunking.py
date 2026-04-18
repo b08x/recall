@@ -7,9 +7,13 @@ class ContextualChunker:
 
     def __init__(self, 
                  max_chunk_chars: int = 8000, 
-                 time_gap_minutes: int = 30):
+                 time_gap_minutes: int = 30,
+                 include_tool_results: bool = True,
+                 max_tool_result_chars: int = 2000):
         self.max_chunk_chars = max_chunk_chars
         self.time_gap_threshold = timedelta(minutes=time_gap_minutes)
+        self.include_tool_results = include_tool_results
+        self.max_tool_result_chars = max_tool_result_chars
 
     def chunk_session(self, session: ParsedSession) -> List[str]:
         """Split a session into a list of text chunks for analysis."""
@@ -86,8 +90,13 @@ class ContextualChunker:
             calls = "\n".join([f"Tool Call: {tc.name}({tc.input})" for tc in msg.tool_calls])
             body += f"\n{calls}"
         
-        if msg.tool_results:
-            results = "\n".join([f"Tool Result: {tr.output[:200]}..." for tr in msg.tool_results])
-            body += f"\n{results}"
+        if msg.tool_results and self.include_tool_results:
+            results = []
+            for tr in msg.tool_results:
+                output = tr.output
+                if len(output) > self.max_tool_result_chars:
+                    output = f"{output[:self.max_tool_result_chars]}...[truncated {len(output) - self.max_tool_result_chars} chars]"
+                results.append(f"Tool Result: {output}")
+            body += f"\n" + "\n".join(results)
 
         return f"{header}\n{body}\n"

@@ -16,7 +16,7 @@ from recall.ai.modules import SessionAnalysisModule, SessionInsightModule, Corre
 from recall.db import PersistenceManager
 from recall.models import ParsedSession, ParsedNote, SessionAnalysis, SessionInsight, SessionInsights, CorrelationResult
 from recall.config import Settings
-from recall.logging import debug, info, error
+from recall.logging import debug, info, error, step, log_metric, log_data
 from recall.utils.limiter import RateLimiter, get_retry_decorator, rate_limited, set_default_limiter
 
 try:
@@ -78,6 +78,9 @@ class MultiSourceCorrelator:
         results = {}
         all_platforms = list(self.providers.keys()) + ["obsidian"]
         target_platforms = platforms or all_platforms
+        
+        log_metric("extract_all_started", 1)
+        log_metric("target_platforms", len(target_platforms))
         
         for platform in target_platforms:
             debug(f"Processing platform: {platform}")
@@ -207,6 +210,7 @@ class MultiSourceCorrelator:
                 self.db.persist_session(session, analysis_obj, insight_obj, overwrite=overwrite)
             
             results[platform] = sessions
+            log_metric("sessions_per_platform", len(sessions))
         
         debug("Extraction all complete")
         if callback:

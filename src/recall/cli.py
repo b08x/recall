@@ -50,6 +50,7 @@ def main():
     p_correlate.add_argument("--github-repo", help="GitHub repo (owner/name)")
     p_correlate.add_argument("--model", help="DSPy model identifier")
     p_correlate.add_argument("--output", help="Output JSON file")
+    p_correlate.add_argument("--overwrite", action="store_true", help="Overwrite existing analysis in the database")
     
     # Search command
     p_search = sub.add_parser("search", help="Semantic search over saved sessions")
@@ -79,7 +80,7 @@ def main():
         
         elif args.command == "correlate":
             platforms = None # Default all
-            sessions = correlator.extract_all(args.days, platforms, overwrite=args.overwrite)
+            sessions = correlator.extract_all(args.days, platforms, overwrite=getattr(args, 'overwrite', False))
             tui.display_correlation(correlator, sessions, args.days, args.github_repo)
             
         sys.exit(0)
