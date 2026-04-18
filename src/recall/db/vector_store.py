@@ -26,7 +26,7 @@ except ImportError:
 class OllamaEmbeddingFunction(EmbeddingFunction):
     """Custom embedding function for Ollama's embeddinggemma model."""
     
-    def __init__(self, host: str = "http://tinybot:11434", model: str = "embeddinggemma", max_tokens: int = 2048):
+    def __init__(self, host: str = "http://tinybot:11434", model: str = "embeddinggemma", max_tokens: int = 1024):
         self.host = host
         self.model = model
         self.max_tokens = max_tokens
@@ -48,18 +48,27 @@ class OllamaEmbeddingFunction(EmbeddingFunction):
         @retry_decorator
         def _get_embedding(text: str):
             self.limiter.wait()
-            response = self.client.post(
-                f"{self.host}/api/embeddings",
-                json={"model": self.model, "prompt": text}
-            )
-            response.raise_for_status()
-            return response.json()["embedding"]
+            char_count = len(text)
+            token_count = len(self.encoding.encode(text)) if self.encoding else "unknown"
+            debug(f"Requesting embedding for chunk: {char_count} chars, ~{token_count} tokens")
+            
+            try:
+                response = self.client.post(
+                    f"{self.host}/api/embeddings",
+                    json={"model": self.model, "prompt": text}
+                )
+                response.raise_for_status()
+                return response.json()["embedding"]
+            except httpx.HTTPStatusError as e:
+                error(f"Ollama embedding error ({e.response.status_code}): {e.response.text}")
+                raise
 
-        for text in input:
+        for i, text in enumerate(input):
             # Use proper tokenizer to safely maximize context window without triggering 500 errors
             if self.encoding:
                 tokens = self.encoding.encode(text)
                 if len(tokens) > self.max_tokens:
+                    debug(f"Truncating chunk {i} from {len(tokens)} to {self.max_tokens} tokens")
                     safe_text = self.encoding.decode(tokens[:self.max_tokens])
                 else:
                     safe_text = text

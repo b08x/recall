@@ -4,7 +4,7 @@ from recall.models import ParsedSession, SessionAnalysis, SessionInsights, Corre
 from recall.db.sqlite_store import SQLiteStore
 from recall.db.vector_store import VectorStore
 from recall.ai.chunking import ContextualChunker
-from recall.logging import debug
+from recall.logging import debug, error
 
 class PersistenceManager:
     """Orchestrates data flow between SQLite and Vector storage."""
@@ -71,9 +71,10 @@ class PersistenceManager:
                     debug(f"Successfully persisted and indexed session {session.id}")
                 except Exception as ve:
                     # If vector fails, mark as failed for reconciliation
+                    # We do NOT raise here to ensure Dual-Write resilience:
+                    # the SQLite data is already committed.
                     self.sqlite.update_indexing_status(session.id, 'failed')
-                    debug(f"Vector indexing failed for session {session.id}: {ve}")
-                    raise
+                    error(f"Vector indexing failed for session {session.id}: {ve}")
         except Exception as e:
             # Only rollback if the initial relational save failed
             try:

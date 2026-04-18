@@ -222,7 +222,10 @@ class MultiSourceCorrelator:
                 
                 # Persist each session as it is processed
                 debug(f"Persisting session {session.id} to storage")
-                self.db.persist_session(session, analysis_obj, insight_obj, overwrite=overwrite)
+                try:
+                    self.db.persist_session(session, analysis_obj, insight_obj, overwrite=overwrite)
+                except Exception as e:
+                    error(f"Failed to persist session {session.id}: {e}")
             
             results[platform] = sessions
             log_metric("sessions_per_platform", len(sessions))
