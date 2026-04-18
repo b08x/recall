@@ -98,8 +98,11 @@ class MultiSourceCorrelator:
                     existing_analysis = None
                     if not overwrite:
                         existing_analysis = self.db.get_analysis(session.id)
+                    else:
+                        debug(f"Overwrite enabled: forcing re-analysis for session {session.id}")
                     
                     if existing_analysis:
+                        debug(f"Found existing analysis for {session.id} (topics: {len(existing_analysis.topics)})")
                         info(f"Re-using existing analysis for session {session.id}")
                         if callback:
                             callback(f"Re-using analysis for {platform} {i+1}/{len(sessions)}...", progress=0.5)
@@ -109,6 +112,9 @@ class MultiSourceCorrelator:
                             session.generated_title = session.summary[0]
                         analysis_obj = existing_analysis
                     else:
+                        if not overwrite:
+                            debug(f"No existing analysis found for {session.id}. Starting AI analysis...")
+                        
                         debug(f"Analyzing session {i+1}/{len(sessions)} (ID: {session.id})")
                         if callback:
                             callback(f"Analyzing {platform} {i+1}/{len(sessions)}...", progress=0.5)
@@ -125,10 +131,12 @@ class MultiSourceCorrelator:
                             key_actions=analysis_data.get("key_actions", []),
                             analyzed_at=datetime.now(timezone.utc)
                         )
+                else:
+                    debug(f"Skipping analysis for session {session.id} (analyze=False)")
                 
                 # Persist each session as it is processed
                 debug(f"Persisting session {session.id} to storage")
-                self.db.persist_session(session, analysis_obj)
+                self.db.persist_session(session, analysis_obj, overwrite=overwrite)
             
             results[platform] = sessions
         

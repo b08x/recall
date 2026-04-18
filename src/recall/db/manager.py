@@ -18,7 +18,7 @@ class PersistenceManager:
         self.vector = VectorStore(persist_directory=vector_dir, ollama_host=ollama_host)
         self.chunker = ContextualChunker()
 
-    def persist_session(self, session: ParsedSession, analysis: Optional[SessionAnalysis] = None):
+    def persist_session(self, session: ParsedSession, analysis: Optional[SessionAnalysis] = None, overwrite: bool = False):
         """Save a session, its analysis, and index its chunks for semantic search."""
         # 1. Relational storage
         self.sqlite.save_session(session)
@@ -26,6 +26,14 @@ class PersistenceManager:
             self.sqlite.save_analysis(analysis)
 
         # 2. Vector storage
+        if overwrite:
+            debug(f"Overwrite: deleting existing vector chunks for {session.id}")
+            self.vector.delete_session(session.id)
+        elif self.vector.has_session(session.id):
+            debug(f"Session {session.id} already indexed in vector store, skipping.")
+            return
+
+        debug(f"Generating chunks and embeddings for session {session.id}...")
         chunks = self.chunker.chunk_session(session)
         if chunks:
             # Create basic metadata for each chunk

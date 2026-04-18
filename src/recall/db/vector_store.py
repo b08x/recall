@@ -112,6 +112,29 @@ class VectorStore:
         )
         debug(f"Added {len(chunks)} chunks to vector store for session {session_id}")
 
+    def delete_session(self, session_id: str):
+        """Delete all chunks associated with a session."""
+        if not self.collection:
+            return
+        
+        try:
+            self.collection.delete(where={"session_id": session_id})
+            debug(f"Deleted existing chunks for session {session_id}")
+        except Exception as e:
+            error(f"Error deleting chunks for session {session_id}: {e}")
+
+    def has_session(self, session_id: str) -> bool:
+        """Check if a session already has chunks in the vector store."""
+        if not self.collection:
+            return False
+            
+        try:
+            result = self.collection.get(where={"session_id": session_id}, limit=1)
+            return len(result.get("ids", [])) > 0
+        except Exception as e:
+            debug(f"Error checking session {session_id} in vector store: {e}")
+            return False
+
     def query(self, query_text: str, n_results: int = 5, where: Optional[Dict] = None):
         """Find the most semantically relevant chunks."""
         if not self.collection:
