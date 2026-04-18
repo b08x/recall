@@ -21,7 +21,7 @@ Recall is a modern Python application designed for multi-platform session extrac
 The project follows a standard `src`-layout for modern Python packages:
 
 - `src/recall/`: Core package directory.
-  - `core.py`: Main orchestration logic with **concurrent session analysis** via `ThreadPoolExecutor`, token estimation pre-flight checks (with robust regex fallback), and a **Persistent Dead Letter Queue (DLQ)** with CLI-managed retry capabilities. Enforces **30s timeouts** on all external subprocess calls to ensure thread availability.
+  - `core.py`: Main orchestration logic with **concurrent session analysis** via `ThreadPoolExecutor`, token estimation pre-flight checks (with robust regex fallback), and a **Persistent Dead Letter Queue (DLQ)** with CLI-managed retry capabilities. Enforces **asynchronous timeouts** on all external subprocess calls using `asyncio.wait_for` to ensure thread availability and prevent hangs.
   - `cli.py`: Command-line interface with **cost-aware user confirmations** and dedicated `dlq` subcommands for failure management.
   - `config.py`: Configuration management via `.env.local` supporting `MAX_WORKERS` and safety limits.
   - `utils/`: Common utilities including a **provider-specific `RateLimiter`** (named queues) and retry decorators.
@@ -31,9 +31,10 @@ The project follows a standard `src`-layout for modern Python packages:
   - `ai/`: DSPy modules and signatures using **Pydantic-aware predictors** for schema safety.
   - `db/`: Persistence layer with **Atomic Dual-Writes**.
     - `manager.py`: Orchestrates transactional SQL and Vector synchronization with **automatic failed-write reconciliation** and thread-safe connection reuse.
-    - `sqlite_store.py`: SQLite implementation with **Write-Ahead Logging (WAL)** mode enabled, **thread-local connection pooling**, full object reconstruction, and persistent DLQ tracking.
+    - `sqlite_store.py`: SQLite implementation with **Write-Ahead Logging (WAL)** mode enabled, **resilient thread-local connection pooling** with liveness checks, full object reconstruction, and persistent DLQ tracking.
     - `vector_store.py`: ChromaDB implementation with **tiktoken truncation (or conservative regex fallback)** and safety buffers.
   - `providers/`: Specialized extractors for Gemini, Claude Code, Hermes, OpenCode, Obsidian, and Git.
+    - **Robust Parsing**: Implements **non-empty message filtering** and correctly extracts **tool results**, **thinking blocks**, and **concatenated text blocks**.
     - `context/`: ContextSource plugins (ObsidianContextSource, GitContextSource) for insight enhancement with hybrid relevance matching.
   - `context.py`: Context enhancement orchestration with ContextSourceManager and pluggable architecture.
 

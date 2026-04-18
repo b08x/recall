@@ -6,6 +6,8 @@ Recall is a multi-platform session extraction and correlation tool. It gathers c
 
 - **Context Enhancement**: Intelligent enrichment of session insights using relevant documentation from Obsidian and development patterns from Git history through a pluggable **ContextSource architecture**.
 - **Enhanced Correlation**: Timeline synthesis leverages context insights to provide strategic recommendations and identify knowledge gaps filled during development workflows.
+- **Robust Session Parsing**: Standardized extraction across all providers with **non-empty message filtering**. Correctly captures **tool results**, **internal thinking blocks**, and maintains work context by concatenating multiple text segments.
+- **Subagent Support**: Advanced project path resolution for Claude Code, correctly associating subagent sessions with their parent projects.
 - **Parallel Extraction**: High-performance session extraction and analysis using `ThreadPoolExecutor` and provider-specific **named `RateLimiter` queues** to prevent global throttling.
 - **Resilient Processing**: Integrated **Persistent Dead Letter Queue (DLQ)** that survives application restarts, with CLI management for auditing and retrying failed sessions.
 - **Subprocess Safety**: Enforced **execution timeouts** on all external CLI calls (GitHub, Git) to prevent thread starvation and application hangs.

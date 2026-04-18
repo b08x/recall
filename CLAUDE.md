@@ -62,6 +62,7 @@ codemap --diff  # See changes vs main branch
 ### Key Design Patterns
 - **Transactional Dual-Writes**: Atomic synchronization between relational and vector storage with automatic failed-write reconciliation
 - **Named Rate Limiting**: Provider-specific throttling via named queues (e.g., `gemini`, `github`, `embeddings`) to prevent global stalls
+- **Robust Session Parsing**: Standardized **filtering of empty messages** across all providers. Special handling for Claude Code to extract **tool results**, **thinking blocks**, and resolve complex **project paths for subagents**.
 - **Persistent DLQ**: Survives application restarts, allows retry of failed sessions
 - **Safety-First Processing**: Conservative chunking, token-aware context management with built-in safety buffers
 - **Schema Safety**: DSPy Pydantic-aware predictors eliminate heuristic parsing
