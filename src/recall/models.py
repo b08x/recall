@@ -1,0 +1,106 @@
+from dataclasses import dataclass, asdict
+from datetime import datetime
+from typing import Dict, List, Optional, Any, Literal
+
+@dataclass
+class SessionUsage:
+    """Unified usage metrics across providers."""
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+    models_used: List[str] = None
+    primary_model: str = "unknown"
+    usage_source: str = "session"  # 'session' | 'message'
+
+    def __post_init__(self):
+        if self.models_used is None:
+            self.models_used = []
+
+
+@dataclass
+class ToolCall:
+    """Unified tool call structure."""
+    id: str
+    name: str
+    input: Dict[str, Any]
+
+
+@dataclass  
+class ToolResult:
+    """Unified tool result structure."""
+    tool_use_id: str
+    output: str
+
+
+@dataclass
+class ParsedMessage:
+    """Unified message structure."""
+    id: str
+    session_id: str
+    type: Literal['user', 'assistant', 'system']
+    content: str
+    thinking: Optional[str] = None
+    tool_calls: List[ToolCall] = None
+    tool_results: List[ToolResult] = None
+    usage: Optional[Dict[str, Any]] = None
+    timestamp: datetime = None
+    parent_id: Optional[str] = None
+
+    def __post_init__(self):
+        if self.tool_calls is None:
+            self.tool_calls = []
+        if self.tool_results is None:
+            self.tool_results = []
+
+
+@dataclass
+class ParsedNote:
+    """Unified structure for notes (e.g., Obsidian)."""
+    id: str
+    title: str
+    path: str
+    content: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    tags: List[str] = None
+    source: str = "obsidian"
+
+    def __post_init__(self):
+        if self.tags is None:
+            self.tags = []
+
+
+@dataclass
+class ParsedSession:
+    """Unified session schema matching TypeScript implementation."""
+    id: str
+    project_path: str
+    project_name: str
+    summary: Optional[str] = None
+    generated_title: Optional[str] = None
+    title_source: Optional[str] = None  # 'insight' | 'first_message'
+    session_character: Optional[str] = None
+    started_at: datetime = None
+    ended_at: datetime = None
+    message_count: int = 0
+    user_message_count: int = 0
+    assistant_message_count: int = 0
+    tool_call_count: int = 0
+    compact_count: int = 0
+    auto_compact_count: int = 0
+    slash_commands: List[str] = None
+    git_branch: Optional[str] = None
+    claude_version: Optional[str] = None
+    source_tool: str = "unknown"
+    usage: SessionUsage = None
+    messages: List[ParsedMessage] = None
+
+    def __post_init__(self):
+        if self.slash_commands is None:
+            self.slash_commands = []
+        if self.messages is None:
+            self.messages = []
+        if self.usage is None:
+            self.usage = SessionUsage()
