@@ -257,6 +257,7 @@ class GitContextSource(ContextSource):
                 "--max-count=10",
                 "--since=30 days ago",
                 f"--grep={keyword}",
+                "--fixed-strings",
                 "--regexp-ignore-case"
             ]
 
@@ -269,16 +270,24 @@ class GitContextSource(ContextSource):
         """Run a git command and parse the JSON output."""
 
         try:
-            result = await asyncio.create_subprocess_exec(
+            process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                timeout=10
+                stderr=asyncio.subprocess.PIPE
             )
 
-            stdout, stderr = await result.communicate()
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
+            except asyncio.TimeoutError:
+                try:
+                    process.kill()
+                    await process.wait()
+                except ProcessLookupError:
+                    pass
+                debug(f"Git command timed out in {repo_path}")
+                return []
 
-            if result.returncode != 0:
+            if process.returncode != 0:
                 debug(f"Git command failed in {repo_path}: {stderr.decode()}")
                 return []
 

@@ -24,6 +24,14 @@ class SQLiteStore:
             self._local.conn = sqlite3.connect(self.db_path, timeout=5000)
             self._local.conn.row_factory = sqlite3.Row
             self._local.conn.execute("PRAGMA journal_mode=WAL;")
+        else:
+            try:
+                # Check if connection is still alive
+                self._local.conn.execute("SELECT 1")
+            except (sqlite3.ProgrammingError, sqlite3.ReferenceError):
+                self._local.conn = sqlite3.connect(self.db_path, timeout=5000)
+                self._local.conn.row_factory = sqlite3.Row
+                self._local.conn.execute("PRAGMA journal_mode=WAL;")
         return self._local.conn
 
     def close(self):
@@ -254,7 +262,7 @@ class SQLiteStore:
                 conn.commit()
         finally:
             if should_close:
-                conn.close()
+                self.close()
 
     def update_indexing_status(self, session_id: str, status: str):
         """Update the indexing status of a session."""
@@ -312,14 +320,16 @@ class SQLiteStore:
                 insights_list.append(SessionInsight(
                     category=row['category'],
                     content=row['content'],
-                    importance=row['importance'],
-                    primary_theme=row['primary_theme'],
-                    confidence=row['confidence']
+                    importance=row['importance']
                 ))
             
+            # primary_theme and confidence are session-level, take from the first row
+            first_row = rows[0]
             return SessionInsights(
                 session_id=session_id,
-                insights=insights_list
+                insights=insights_list,
+                primary_theme=first_row['primary_theme'] or "General",
+                confidence=first_row['confidence'] or 0.0
             )
 
     def save_analysis(self, analysis: SessionAnalysis, conn: Optional[sqlite3.Connection] = None):
@@ -360,7 +370,7 @@ class SQLiteStore:
                 conn.commit()
         finally:
             if should_close:
-                conn.close()
+                self.close()
 
     def save_insights(self, insights: SessionInsights, conn: Optional[sqlite3.Connection] = None):
         """Save session insights."""
@@ -377,13 +387,13 @@ class SQLiteStore:
                     ) VALUES (?, ?, ?, ?, ?, ?)
                 """, (
                     insights.session_id, insight.category, insight.content,
-                    insight.importance, insight.primary_theme, insight.confidence
+                    insight.importance, insights.primary_theme, insights.confidence
                 ))
             if should_close:
                 conn.commit()
         finally:
             if should_close:
-                conn.close()
+                self.close()
 
     def save_correlation(self, correlation: CorrelationResult):
         """Save a correlation result and its linked sessions."""

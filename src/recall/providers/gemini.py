@@ -93,11 +93,7 @@ class GeminiProvider(BaseProvider):
 
                 msg_type = self._normalize_type(msg["type"])
                 content = self._extract_content(msg)
-
-                if msg_type == "user":
-                    user_count += 1
-                elif msg_type == "assistant":
-                    assistant_count += 1
+                thinking = self._extract_thinking(msg)
 
                 # Extract tool calls
                 tool_calls = []
@@ -107,19 +103,29 @@ class GeminiProvider(BaseProvider):
                         name=tc.get("name", ""),
                         input=tc.get("args", {})
                     ))
-                    tool_count += 1
 
-                messages.append(ParsedMessage(
-                    id=msg.get("id", ""),
-                    session_id=data["sessionId"],
-                    type=msg_type,
-                    content=content,
-                    thinking=self._extract_thinking(msg),
-                    tool_calls=tool_calls,
-                    tool_results=self._extract_tool_results(msg),
-                    usage=self._extract_usage(msg),
-                    timestamp=self._parse_timestamp(msg.get("timestamp"))
-                ))
+                tool_results = self._extract_tool_results(msg)
+                
+                # Only add message if it has some meaningful content
+                if content or thinking or tool_calls or tool_results:
+                    if msg_type == "user":
+                        user_count += 1
+                    elif msg_type == "assistant":
+                        assistant_count += 1
+                    
+                    tool_count += len(tool_calls)
+
+                    messages.append(ParsedMessage(
+                        id=msg.get("id", ""),
+                        session_id=data["sessionId"],
+                        type=msg_type,
+                        content=content,
+                        thinking=thinking,
+                        tool_calls=tool_calls,
+                        tool_results=tool_results,
+                        usage=self._extract_usage(msg),
+                        timestamp=self._parse_timestamp(msg.get("timestamp"))
+                    ))
 
             if not messages:
                 return None

@@ -114,45 +114,29 @@ class HermesProvider(BaseProvider):
 
                 msg_type = "assistant" if role == "assistant" else "user"
 
-                if msg_type == "user":
-                    user_count += 1
-                else:
-                    assistant_count += 1
+                # Only add message if it has meaningful content
+                if row["content"] or row["reasoning"] or tool_calls:
+                    if msg_type == "user":
+                        user_count += 1
+                    else:
+                        assistant_count += 1
+                    
+                    tool_count += len(tool_calls)
 
-                # Parse tool calls from JSON string
-                tool_calls = []
-                if row["tool_calls"]:
-                    try:
-                        parsed = json.loads(row["tool_calls"])
-                        for tc in parsed:
-                            tool_calls.append(ToolCall(
-                                id=tc.get("id", ""),
-                                name=tc.get("name") or tc.get("function", {}).get("name", ""),
-                                input=tc.get("args") or tc.get("function", {}).get("arguments", {})
-                            ))
-                            tool_count += 1
-                    except json.JSONDecodeError:
-                        pass
-
-                # Timestamp is in SECONDS
-                timestamp = datetime.fromtimestamp(
-                    row["timestamp"], tz=timezone.utc
-                ) if row["timestamp"] else None
-
-                messages.append(ParsedMessage(
-                    id=f"hermes-{row['id']}",
-                    session_id=f"hermes-agent:{session_id}",
-                    type=msg_type,
-                    content=row["content"] or "",
-                    thinking=row["reasoning"],
-                    tool_calls=tool_calls,
-                    tool_results=[],
-                    usage={
-                        "outputTokens": row["token_count"] or 0,
-                        "model": session_row["model"] or "unknown"
-                    } if row["token_count"] else None,
-                    timestamp=timestamp
-                ))
+                    messages.append(ParsedMessage(
+                        id=f"hermes-{row['id']}",
+                        session_id=f"hermes-agent:{session_id}",
+                        type=msg_type,
+                        content=row["content"] or "",
+                        thinking=row["reasoning"],
+                        tool_calls=tool_calls,
+                        tool_results=[],
+                        usage={
+                            "outputTokens": row["token_count"] or 0,
+                            "model": session_row["model"] or "unknown"
+                        } if row["token_count"] else None,
+                        timestamp=timestamp
+                    ))
 
             # Build usage from session-level data
             usage = SessionUsage(
@@ -230,12 +214,8 @@ class HermesProvider(BaseProvider):
                         ))
                     continue
 
-                msg_type = "assistant" if role == "assistant" else "user"
-                if msg_type == "user":
-                    user_count += 1
-                else:
-                    assistant_count += 1
-                    total_out += msg_data.get("token_count") or 0
+                content = msg_data.get("content") or ""
+                thinking = msg_data.get("reasoning")
 
                 # Extract tool calls
                 tool_calls = []
@@ -245,22 +225,31 @@ class HermesProvider(BaseProvider):
                         name=tc_data.get("function", {}).get("name") or tc_data.get("name", ""),
                         input=tc_data.get("function", {}).get("arguments") or tc_data.get("args") or {}
                     ))
-                    tool_count += 1
 
-                messages.append(ParsedMessage(
-                    id=f"hermes-{len(messages)}",
-                    session_id=f"hermes-agent:{session_id}",
-                    type=msg_type,
-                    content=msg_data.get("content") or "",
-                    thinking=msg_data.get("reasoning"),
-                    tool_calls=tool_calls,
-                    tool_results=[],
-                    usage={
-                        "outputTokens": msg_data.get("token_count") or 0,
-                        "model": model
-                    } if msg_data.get("token_count") else None,
-                    timestamp=None # Messages don't have timestamps in JSON
-                ))
+                # Only add message if it has meaningful content
+                if content or thinking or tool_calls:
+                    if msg_type == "user":
+                        user_count += 1
+                    else:
+                        assistant_count += 1
+                        total_out += msg_data.get("token_count") or 0
+                    
+                    tool_count += len(tool_calls)
+
+                    messages.append(ParsedMessage(
+                        id=f"hermes-{len(messages)}",
+                        session_id=f"hermes-agent:{session_id}",
+                        type=msg_type,
+                        content=content,
+                        thinking=thinking,
+                        tool_calls=tool_calls,
+                        tool_results=[],
+                        usage={
+                            "outputTokens": msg_data.get("token_count") or 0,
+                            "model": model
+                        } if msg_data.get("token_count") else None,
+                        timestamp=None # Messages don't have timestamps in JSON
+                    ))
 
             started = self._parse_timestamp(data.get("session_start"))
             ended = self._parse_timestamp(data.get("last_updated")) or started

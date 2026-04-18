@@ -76,17 +76,22 @@ class OpenCodeProvider(BaseProvider):
                 try:
                     data = json.loads(row["data"])
                     role = data.get("role", "unknown")
+                    
+                    content = self._extract_content(data)
+                    tool_calls = self._extract_tools(data)
 
-                    messages.append(ParsedMessage(
-                        id=str(row["id"]),
-                        session_id=session_id,
-                        type=role if role in ["user", "assistant"] else "system",
-                        content=self._extract_content(data),
-                        tool_calls=self._extract_tools(data),
-                        timestamp=datetime.fromtimestamp(
-                            row["time_created"] / 1000, tz=timezone.utc
-                        )
-                    ))
+                    # Only add message if it has meaningful content
+                    if content or tool_calls:
+                        messages.append(ParsedMessage(
+                            id=str(row["id"]),
+                            session_id=session_id,
+                            type=role if role in ["user", "assistant"] else "system",
+                            content=content,
+                            tool_calls=tool_calls,
+                            timestamp=datetime.fromtimestamp(
+                                row["time_created"] / 1000, tz=timezone.utc
+                            )
+                        ))
                 except json.JSONDecodeError:
                     continue
 
