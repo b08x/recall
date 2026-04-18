@@ -24,13 +24,15 @@ except ImportError:
     class Embeddings: pass
 
 class OllamaEmbeddingFunction(EmbeddingFunction):
-    """Custom embedding function for Ollama's embeddinggemma model."""
+    """Custom embedding function for Ollama's embedding models with safety truncation."""
     
-    def __init__(self, host: str = "http://tinybot:11434", model: str = "embeddinggemma", max_tokens: int = 1024):
+    def __init__(self, host: str = "http://tinybot:11434", model: str = "embeddinggemma", max_tokens: int = 768):
         self.host = host
         self.model = model
         self.max_tokens = max_tokens
-        self.client = httpx.Client(timeout=60.0)  # Increased timeout
+        # 10% safety buffer to account for tokenizer differences between cl100k_base and local model
+        self.safe_limit = int(max_tokens * 0.9)
+        self.client = httpx.Client(timeout=60.0)
         self.limiter = get_default_limiter()
         self.encoding = tiktoken.get_encoding("cl100k_base") if HAS_TIKTOKEN else None
 
@@ -67,9 +69,9 @@ class OllamaEmbeddingFunction(EmbeddingFunction):
             # Use proper tokenizer to safely maximize context window without triggering 500 errors
             if self.encoding:
                 tokens = self.encoding.encode(text)
-                if len(tokens) > self.max_tokens:
-                    debug(f"Truncating chunk {i} from {len(tokens)} to {self.max_tokens} tokens")
-                    safe_text = self.encoding.decode(tokens[:self.max_tokens])
+                if len(tokens) > self.safe_limit:
+                    debug(f"Truncating chunk {i} from {len(tokens)} to {self.safe_limit} tokens (buffer active)")
+                    safe_text = self.encoding.decode(tokens[:self.safe_limit])
                 else:
                     safe_text = text
             else:
@@ -91,7 +93,8 @@ class VectorStore:
                  collection_name: str = "recall_sessions", 
                  persist_directory: str = "./chroma_db",
                  ollama_host: str = "http://tinybot:11434",
-                 ollama_model: str = "embeddinggemma"):
+                 ollama_model: str = "embeddinggemma",
+                 max_tokens: int = 768):
         
         if not CHROMA_AVAILABLE:
             debug("ChromaDB not available. Semantic features will be disabled.")
@@ -99,7 +102,11 @@ class VectorStore:
             return
 
         self.client = chromadb.PersistentClient(path=persist_directory)
-        self.embedding_fn = OllamaEmbeddingFunction(host=ollama_host, model=ollama_model)
+        self.embedding_fn = OllamaEmbeddingFunction(
+            host=ollama_host, 
+            model=ollama_model,
+            max_tokens=max_tokens
+        )
         
         self.collection = self.client.get_or_create_collection(
             name=collection_name,

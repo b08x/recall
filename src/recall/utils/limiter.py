@@ -1,4 +1,5 @@
 import time
+import threading
 from functools import wraps
 from typing import Callable, Any, Optional
 from tenacity import (
@@ -14,25 +15,27 @@ from recall.logging import debug, info, error
 logger = logging.getLogger(__name__)
 
 class RateLimiter:
-    """Simple rate limiter using time.sleep."""
+    """Thread-safe rate limiter using time.sleep."""
     
     def __init__(self, requests_per_minute: int):
         self.interval = 60.0 / requests_per_minute if requests_per_minute > 0 else 0
         self.last_call = 0.0
+        self._lock = threading.Lock()
 
     def wait(self):
-        """Wait if necessary before the next call."""
+        """Wait if necessary before the next call. Thread-safe."""
         if self.interval == 0:
             return
             
-        now = time.time()
-        elapsed = now - self.last_call
-        wait_time = self.interval - elapsed
-        
-        if wait_time > 0:
-            time.sleep(wait_time)
+        with self._lock:
+            now = time.time()
+            elapsed = now - self.last_call
+            wait_time = self.interval - elapsed
             
-        self.last_call = time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
+                
+            self.last_call = time.time()
 
 # Global default limiter instance, will be configured by MultiSourceCorrelator
 _default_limiter = RateLimiter(requests_per_minute=20)

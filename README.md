@@ -4,14 +4,15 @@ Recall is a multi-platform session extraction and correlation tool. It gathers c
 
 ## Features
 
-- **Transactional Dual-Writes**: Atomic synchronization between relational SQLite data and ChromaDB vector chunks.
+- **Parallel Extraction**: High-performance session extraction and analysis using `ThreadPoolExecutor` and a **thread-safe `RateLimiter`**.
+- **Transactional Dual-Writes**: Atomic synchronization between relational SQLite data and ChromaDB vector chunks with **automatic failed-write reconciliation**.
 - **Cost Management**: Integrated **Pre-flight Token Estimation** using `tiktoken` with user confirmation thresholds to prevent API cost overruns.
-- **Schema Safety**: Uses **DSPy Pydantic-aware Predictors** and strict models for AI-generated insights, ensuring output consistency.
-- **Precise Windowing**: Token-aware context management in the vector store to maximize input quality without backend failures.
+- **Schema Safety**: Uses **DSPy Pydantic-aware Predictors** and strict models for AI-generated insights, ensuring output consistency and eliminating heuristic parsing.
+- **Safety-First Windowing**: Conservative chunking and token-aware context management with **built-in safety buffers** to maximize input quality and prevent local model failures.
 - **Auto-Migration**: Self-healing SQLite schema that automatically handles database updates.
 - **Robustness**: Built-in conservative rate limiting and exponential backoff retries for all AI and GitHub API interactions.
 - **Semantic Search**: Leverage ChromaDB and Ollama (`embeddinggemma`) to find sessions based on meaning, not just keywords.
-- **Persistent Data Layer**: Automatic storage of all sessions, messages, and AI-driven analyses in a local SQLite database.
+- **Persistent Data Layer**: Automatic storage of all sessions, messages, and AI-driven analyses in a local SQLite database with full object reconstruction.
 - **Git Correlation**: Match AI sessions with local and remote Git commits to see code changes in context.
 - **Obsidian Integration**: Include relevant notes from your personal knowledge base.
 - **AI Synthesis**: Uses [DSPy](https://github.com/stanfordnlp/dspy) to generate narratives and identify next actions (supports Mistral, OpenAI, Ollama).

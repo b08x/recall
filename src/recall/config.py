@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     # Embedding Settings
     ollama_host: str = Field(default="http://tinybot:11434", description="Host for Ollama embedding service")
     embedding_model: str = Field(default="embeddinggemma", description="Ollama model for embeddings")
+    embedding_max_tokens: int = Field(default=768, description="Maximum tokens for local embedding models")
+    chunk_max_chars: int = Field(default=6000, description="Conservative character limit for text chunking")
     
     # API Keys
     openrouter_api_key: Optional[SecretStr] = None
@@ -45,6 +47,7 @@ class Settings(BaseSettings):
     retry_min_wait: float = Field(default=1.0, description="Minimum wait time between retries (seconds)")
     retry_max_wait: float = Field(default=60.0, description="Maximum wait time between retries (seconds)")
     requests_per_minute: int = Field(default=20, description="Conservative rate limit (requests per minute)")
+    max_workers: int = Field(default=10, description="Maximum number of worker threads for parallel extraction/analysis")
     token_warning_threshold: int = Field(default=100000, description="Threshold for token count warning before LLM analysis")
     
     model_config = SettingsConfigDict(

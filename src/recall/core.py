@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Any
 from dataclasses import asdict
@@ -25,6 +26,14 @@ try:
 except ImportError:
     DSPY_AVAILABLE = False
 
+try:
+    import tiktoken
+    TIKTOKEN_AVAILABLE = True
+    _TIKTOKEN_ENCODING = tiktoken.get_encoding("cl100k_base")
+except ImportError:
+    TIKTOKEN_AVAILABLE = False
+    _TIKTOKEN_ENCODING = None
+
 class MultiSourceCorrelator:
     """Orchestrates session extraction, correlation, and analysis."""
 
@@ -48,27 +57,105 @@ class MultiSourceCorrelator:
         self.db = PersistenceManager(
             db_path=self.settings.db_path,
             vector_dir=self.settings.vector_db_dir,
-            ollama_host=self.settings.ollama_host
+            ollama_host=self.settings.ollama_host,
+            ollama_model=self.settings.embedding_model,
+            embedding_max_tokens=self.settings.embedding_max_tokens,
+            chunk_max_chars=self.settings.chunk_max_chars
         )
         
         # DSPy configuration from settings
         self.dspy_provider = self.settings.dspy_provider
         self.dspy_model = self.settings.dspy_model
-        
+
+        # Run reconciliation for any failed indexing jobs from previous runs
+        self.db.reconcile_failed_vectors()
+
     def estimate_session_tokens(self, sessions: List[ParsedSession]) -> int:
         """Estimate the total number of tokens across a list of sessions."""
-        try:
-            import tiktoken
-            encoding = tiktoken.get_encoding("cl100k_base")
-        except ImportError:
+        if not TIKTOKEN_AVAILABLE or not _TIKTOKEN_ENCODING:
             # Fallback to rough character-based estimation (4 chars per token)
             return sum(len(m.content or "") for s in sessions for m in s.messages) // 4
 
         total = 0
         for s in sessions:
             for m in s.messages:
-                total += len(encoding.encode(m.content or ""))
+                total += len(_TIKTOKEN_ENCODING.encode(m.content or ""))
         return total
+
+    def _process_single_session(self, 
+                               session: ParsedSession, 
+                               platform: str,
+                               analyze: bool, 
+                               overwrite: bool, 
+                               analysis_model: str, 
+                               insights_model: str, 
+                               insights_provider: str,
+                               callback: Optional[callable] = None):
+        """Analyze and persist a single session. Designed to be run in a thread pool."""
+        analysis_obj = None
+        insight_obj = None
+        
+        if analyze:
+            # Check for existing analysis/insights unless overwrite is True
+            existing_analysis = None
+            existing_insights = None
+            if not overwrite:
+                existing_analysis = self.db.get_analysis(session.id)
+                existing_insights = self.db.get_insights(session.id)
+            
+            if existing_analysis:
+                debug(f"Found existing analysis for {session.id}")
+                session.summary = existing_analysis.topics
+                if session.summary:
+                    session.generated_title = session.summary[0]
+                analysis_obj = existing_analysis
+                insight_obj = existing_insights
+            else:
+                debug(f"Analyzing session (ID: {session.id})")
+                
+                # 1. Topic/Activity Analysis
+                analysis_data = self.analyze_session_topics(session, model=analysis_model)
+                session.summary = analysis_data.get("topics", [])
+                if session.summary:
+                    session.generated_title = session.summary[0]
+                
+                analysis_obj = SessionAnalysis(
+                    session_id=session.id,
+                    topics=analysis_data.get("topics", []),
+                    files_touched=analysis_data.get("files_touched", []),
+                    key_actions=analysis_data.get("key_actions", []),
+                    analyzed_at=datetime.now(timezone.utc)
+                )
+
+                # 2. Insight Extraction (REC-002: Simplified Parsing)
+                insight_data = self.analyze_session_insights(session, model=insights_model, provider=insights_provider)
+                
+                valid_insights = []
+                for i in insight_data.get("insights", []):
+                    # Trust the structured Pydantic payload from DSPy module
+                    if isinstance(i, dict) and "content" in i:
+                        valid_insights.append(SessionInsight(
+                            category=i.get("category", "GENERAL").upper(),
+                            content=i.get("content", ""),
+                            importance=float(i.get("importance", 0.5))
+                        ))
+
+                insight_obj = SessionInsights(
+                    session_id=session.id,
+                    insights=valid_insights,
+                    primary_theme=insight_data.get("primary_theme", "General"),
+                    confidence=insight_data.get("confidence", 0.0),
+                    generated_at=datetime.now(timezone.utc)
+                )
+        else:
+            debug(f"Skipping analysis for session {session.id} (analyze=False)")
+        
+        # Persist session
+        debug(f"Persisting session {session.id} to storage")
+        try:
+            self.db.persist_session(session, analysis_obj, insight_obj, overwrite=overwrite)
+        except Exception as e:
+            error(f"Failed to persist session {session.id}: {e}")
 
     def extract_all(self, days: int = 7, 
                     platforms: Optional[List[str]] = None,
@@ -80,6 +167,7 @@ class MultiSourceCorrelator:
                     callback: Optional[callable] = None) -> Dict[str, List[Any]]:
         """
         Extract sessions and notes from all platforms and persist them.
+        Uses ThreadPoolExecutor for concurrent analysis and persistence.
         """
         debug(f"Starting extraction for last {days} days")
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
@@ -97,144 +185,45 @@ class MultiSourceCorrelator:
         log_metric("extract_all_started", 1)
         log_metric("target_platforms", len(target_platforms))
         
-        for platform in target_platforms:
-            debug(f"Processing platform: {platform}")
-            if callback:
-                callback(f"Extracting from {platform}...", progress=0.2)
-                
-            if platform == "obsidian":
-                notes = self.obsidian.extract(date_range)
-                results["obsidian"] = notes
-                debug(f"Extracted {len(notes)} notes from obsidian")
-                continue
-
-            if platform not in self.providers:
-                debug(f"Platform {platform} not found in providers")
-                continue
+        # We'll use a thread pool for the processing of sessions across all platforms
+        with ThreadPoolExecutor(max_workers=self.settings.max_workers) as executor:
+            futures = []
             
-            provider = self.providers[platform]
-            sessions = provider.extract(date_range)
-            debug(f"Extracted {len(sessions)} sessions from {platform}")
-            
-            for i, session in enumerate(sessions):
-                analysis_obj = None
-                insight_obj = None
-                if analyze:
-                    # Check for existing analysis/insights unless overwrite is True
-                    existing_analysis = None
-                    existing_insights = None
-                    if not overwrite:
-                        existing_analysis = self.db.get_analysis(session.id)
-                        existing_insights = self.db.get_insights(session.id)
-                    else:
-                        debug(f"Overwrite enabled: forcing re-analysis for session {session.id}")
+            for platform in target_platforms:
+                debug(f"Processing platform: {platform}")
+                if callback:
+                    callback(f"Extracting from {platform}...", progress=0.2)
                     
-                    if existing_analysis:
-                        debug(f"Found existing analysis for {session.id}")
-                        session.summary = existing_analysis.topics
-                        if session.summary:
-                            session.generated_title = session.summary[0]
-                        analysis_obj = existing_analysis
-                        insight_obj = existing_insights
-                    else:
-                        debug(f"Analyzing session {i+1}/{len(sessions)} (ID: {session.id})")
-                        if callback:
-                            callback(f"Analyzing {platform} {i+1}/{len(sessions)}...", progress=0.5)
-                        
-                        # 1. Topic/Activity Analysis
-                        analysis_data = self.analyze_session_topics(session, model=analysis_model)
-                        session.summary = analysis_data.get("topics", [])
-                        if session.summary:
-                            session.generated_title = session.summary[0]
-                        
-                        analysis_obj = SessionAnalysis(
-                            session_id=session.id,
-                            topics=analysis_data.get("topics", []),
-                            files_touched=analysis_data.get("files_touched", []),
-                            key_actions=analysis_data.get("key_actions", []),
-                            analyzed_at=datetime.now(timezone.utc)
-                        )
+                if platform == "obsidian":
+                    notes = self.obsidian.extract(date_range)
+                    results["obsidian"] = notes
+                    debug(f"Extracted {len(notes)} notes from obsidian")
+                    continue
 
-                        # 2. Insight Extraction
-                        insight_data = self.analyze_session_insights(session, model=insights_model, provider=insights_provider)
-                        
-                        valid_insights = []
-                        for i in insight_data.get("insights", []):
-                            if isinstance(i, dict):
-                                # Filter only valid keys for SessionInsight and ensure types are correct
-                                try:
-                                    # Extract core fields, providing defaults if missing
-                                    category = str(i.get("category", "General")).upper()
-                                    content = str(i.get("content", ""))
-                                    
-                                    # Handle case where LLM might have put content in a weird key or it's missing
-                                    if not content:
-                                        potential_content = []
-                                        for k, v in i.items():
-                                            if k in ["category", "importance"]:
-                                                continue
-                                            
-                                            # Collect long strings from both keys and values
-                                            if isinstance(k, str) and len(k) > 50:
-                                                potential_content.append(k)
-                                            if isinstance(v, str) and len(v) > 50:
-                                                potential_content.append(v)
-                                        
-                                        if potential_content:
-                                            # Join them together as they might be parts of the same insight
-                                            content = " ".join(potential_content).strip()
-                                    
-                                    if not content:
-                                        # One last try: if there's only one extra key and it has a value, use it
-                                        extra_keys = [k for k in i.keys() if k not in ["category", "importance", "content"]]
-                                        if len(extra_keys) == 1:
-                                            k = extra_keys[0]
-                                            v = i[k]
-                                            content = f"{k}: {v}" if isinstance(v, (str, int, float)) else k
-                                    
-                                    if not content:
-                                        continue
-                                        
-                                    importance = i.get("importance", 0.5)
-                                    try:
-                                        importance = float(importance)
-                                    except (ValueError, TypeError):
-                                        importance = 0.5
-                                        
-                                    valid_insights.append(SessionInsight(
-                                        category=category,
-                                        content=content,
-                                        importance=importance
-                                    ))
-                                except Exception as e:
-                                    debug(f"Skipping malformed insight: {e}")
-                                    continue
-
-                        insight_obj = SessionInsights(
-                            session_id=session.id,
-                            insights=valid_insights,
-                            primary_theme=insight_data.get("primary_theme", "General"),
-                            confidence=insight_data.get("confidence", 0.0),
-                            generated_at=datetime.now(timezone.utc)
-                        )
-                else:
-                    debug(f"Skipping analysis for session {session.id} (analyze=False)")
+                if platform not in self.providers:
+                    debug(f"Platform {platform} not found in providers")
+                    continue
                 
-                # Persist each session as it is processed
-                debug(f"Persisting session {session.id} to storage")
+                provider = self.providers[platform]
+                sessions = provider.extract(date_range)
+                debug(f"Extracted {len(sessions)} sessions from {platform}")
+                results[platform] = sessions
+                log_metric("sessions_per_platform", len(sessions))
+                
+                for session in sessions:
+                    # Submit each session to the thread pool for analysis and persistence
+                    futures.append(executor.submit(
+                        self._process_single_session,
+                        session, platform, analyze, overwrite,
+                        analysis_model, insights_model, insights_provider, callback
+                    ))
+            
+            # Wait for all sessions to be processed
+            for future in futures:
                 try:
-                    self.db.persist_session(session, analysis_obj, insight_obj, overwrite=overwrite)
+                    future.result()
                 except Exception as e:
-                    error(f"Failed to persist session {session.id}: {e}")
-            
-            results[platform] = sessions
-            log_metric("sessions_per_platform", len(sessions))
-        
-        debug("Extraction all complete")
-        if callback:
-            callback("Extraction complete.", progress=1.0)
-            
-        return results
+                    error(f"Error in session processing thread: {e}")
         
         debug("Extraction all complete")
         if callback:
@@ -299,9 +288,11 @@ class MultiSourceCorrelator:
                        github_data: Optional[Dict] = None,
                        local_commits: Optional[List[Dict]] = None) -> List[Dict]:
         """Build unified timeline from all sources."""
+        debug("Building unified timeline from sessions, github, and local git")
         timeline = []
         
         for platform, items in sessions.items():
+            debug(f"Adding {len(items)} items from {platform} to timeline")
             for item in items:
                 if isinstance(item, ParsedNote):
                     timeline.append({
@@ -321,7 +312,9 @@ class MultiSourceCorrelator:
                     })
         
         if github_data:
-            for commit in github_data.get("commits", []):
+            github_commits = github_data.get("commits", [])
+            debug(f"Adding {len(github_commits)} GitHub commits to timeline")
+            for commit in github_commits:
                 try:
                     ts = datetime.fromisoformat(commit["date"].replace("Z", "+00:00"))
                 except (KeyError, ValueError):
@@ -336,6 +329,7 @@ class MultiSourceCorrelator:
                 })
         
         if local_commits:
+            debug(f"Adding {len(local_commits)} local git commits to timeline")
             for commit in local_commits:
                 try:
                     ts = datetime.fromisoformat(commit["date"])
@@ -352,7 +346,9 @@ class MultiSourceCorrelator:
                     "summary": f"Local Commit: {commit.get('message', '').split('\n')[0][:60]}"
                 })
         
-        return sorted(timeline, key=lambda x: x.get("timestamp") or datetime.min.replace(tzinfo=timezone.utc))
+        sorted_timeline = sorted(timeline, key=lambda x: x.get("timestamp") or datetime.min.replace(tzinfo=timezone.utc))
+        debug(f"Timeline built with {len(sorted_timeline)} total events")
+        return sorted_timeline
 
     def configure_dspy(self, model: Optional[str] = None, provider: Optional[str] = None):
         """Configure DSPy with specified language model."""
@@ -433,7 +429,9 @@ class MultiSourceCorrelator:
 
     def correlate_with_dspy(self, timeline: List[Dict], model: Optional[str] = None) -> Dict:
         """Use DSPy to generate correlated narrative and next actions."""
+        debug(f"Correlating {len(timeline)} events with DSPy")
         if not DSPY_AVAILABLE or not self.configure_dspy(model):
+            debug("DSPy not available, falling back to heuristic correlation")
             return self._heuristic_correlation(timeline)
         
         sessions = [
@@ -454,12 +452,16 @@ class MultiSourceCorrelator:
             for t in timeline if t["type"] == "commit"
         ][:15]
         
+        debug(f"Prepared {len(sessions)} sessions and {len(commits)} commits for correlation")
         correlator = CorrelationModule()
         
         try:
             self.limiter.wait()
-            return correlator(sessions=sessions, commits=commits, file_changes=[])
-        except Exception:
+            result = correlator(sessions=sessions, commits=commits, file_changes=[])
+            debug("DSPy correlation successful")
+            return result
+        except Exception as e:
+            error(f"Error during DSPy correlation: {e}")
             return self._heuristic_correlation(timeline)
 
     def _heuristic_correlation(self, timeline: List[Dict]) -> Dict:

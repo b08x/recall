@@ -6,7 +6,7 @@ class ContextualChunker:
     """Intelligently chunks session messages based on time and semantic boundaries."""
 
     def __init__(self, 
-                 max_chunk_chars: int = 8000, 
+                 max_chunk_chars: int = 6000, 
                  time_gap_minutes: int = 30,
                  include_tool_results: bool = True,
                  max_tool_result_chars: int = 2000):

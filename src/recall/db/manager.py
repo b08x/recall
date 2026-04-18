@@ -12,11 +12,19 @@ class PersistenceManager:
     def __init__(self, 
                  db_path: str = "recall.db", 
                  vector_dir: str = "./chroma_db",
-                 ollama_host: str = "http://tinybot:11434"):
+                 ollama_host: str = "http://tinybot:11434",
+                 ollama_model: str = "embeddinggemma",
+                 embedding_max_tokens: int = 768,
+                 chunk_max_chars: int = 6000):
         
         self.sqlite = SQLiteStore(db_path)
-        self.vector = VectorStore(persist_directory=vector_dir, ollama_host=ollama_host)
-        self.chunker = ContextualChunker()
+        self.vector = VectorStore(
+            persist_directory=vector_dir, 
+            ollama_host=ollama_host,
+            ollama_model=ollama_model,
+            max_tokens=embedding_max_tokens
+        )
+        self.chunker = ContextualChunker(max_chunk_chars=chunk_max_chars)
 
     def persist_session(self, 
                        session: ParsedSession, 
@@ -96,6 +104,28 @@ class PersistenceManager:
     def get_insights(self, session_id: str) -> Optional[SessionInsights]:
         """Retrieve saved insights for a session from relational store."""
         return self.sqlite.get_insights(session_id)
+
+    def reconcile_failed_vectors(self):
+        """Find sessions that failed to index and retry them."""
+        failed_ids = self.sqlite.get_failed_indexing_sessions()
+        if not failed_ids:
+            return
+
+        debug(f"Starting reconciliation for {len(failed_ids)} sessions with failed indexing status")
+        for session_id in failed_ids:
+            try:
+                session = self.sqlite.get_session(session_id)
+                if not session:
+                    debug(f"Session {session_id} not found during reconciliation, skipping")
+                    continue
+                
+                analysis = self.sqlite.get_analysis(session_id)
+                # Re-run the persistence logic specifically for vector indexing
+                # Using overwrite=True ensures we clean up any partial state in Chroma
+                self.persist_session(session, analysis, overwrite=True)
+                debug(f"Successfully reconciled session {session_id}")
+            except Exception as e:
+                error(f"Reconciliation failed for session {session_id}: {e}")
 
     def semantic_search(self, query: str, platform: Optional[str] = None) -> Dict[str, Any]:
         """Hybrid search: Find relevant chunks and return their session context."""

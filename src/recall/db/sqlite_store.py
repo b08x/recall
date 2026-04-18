@@ -274,16 +274,69 @@ class SQLiteStore:
                 (status, session_id)
             )
 
+    def get_failed_indexing_sessions(self) -> List[str]:
+        """Return a list of session IDs that failed to be indexed."""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT id FROM sessions WHERE indexing_status = 'failed'"
+            ).fetchall()
+            return [row['id'] for row in rows]
+
     def get_session(self, session_id: str) -> Optional[ParsedSession]:
-        """Retrieve a full session with messages."""
+        """Retrieve a full session with messages and tool calls."""
         with self._get_connection() as conn:
             row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
             if not row:
                 return None
             
-            # This is a simplified reconstruction for brevity
-            # In a real impl, we'd rebuild the full nested dataclass structure
-            return row # Returning raw row for now to keep the example concise
+            # Fetch messages
+            msg_rows = conn.execute(
+                "SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp ASC",
+                (session_id,)
+            ).fetchall()
+            
+            messages = []
+            for m_row in msg_rows:
+                # Fetch tool calls for this message
+                tc_rows = conn.execute(
+                    "SELECT * FROM tool_calls WHERE message_id = ?",
+                    (m_row['id'],)
+                ).fetchall()
+                
+                tool_calls = [
+                    ToolCall(id=tc['id'], name=tc['name'], input=json.loads(tc['input']))
+                    for tc in tc_rows
+                ]
+                
+                messages.append(ParsedMessage(
+                    id=m_row['id'],
+                    session_id=session_id,
+                    type=m_row['type'],
+                    content=m_row['content'],
+                    thinking=m_row['thinking'],
+                    tool_calls=tool_calls,
+                    timestamp=datetime.fromisoformat(m_row['timestamp']) if isinstance(m_row['timestamp'], str) else m_row['timestamp'],
+                    parent_id=m_row['parent_id'],
+                    usage=json.loads(m_row['usage']) if m_row['usage'] else None
+                ))
+
+            # Reconstruct SessionUsage
+            metadata = json.loads(row['metadata']) if row['metadata'] else {}
+            
+            return ParsedSession(
+                id=row['id'],
+                project_name=row['project_name'],
+                project_path=row['project_path'],
+                summary=json.loads(row['summary']) if row['summary'] else [],
+                generated_title=row['generated_title'],
+                started_at=datetime.fromisoformat(row['started_at']) if isinstance(row['started_at'], str) else row['started_at'],
+                ended_at=datetime.fromisoformat(row['ended_at']) if isinstance(row['ended_at'], str) else row['ended_at'],
+                message_count=row['message_count'],
+                git_branch=row['git_branch'],
+                source_tool=row['source_tool'],
+                claude_version=metadata.get("claude_version"),
+                messages=messages
+            )
 
     def get_analysis(self, session_id: str) -> Optional[SessionAnalysis]:
         """Retrieve saved analysis for a session."""

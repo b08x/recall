@@ -1,0 +1,100 @@
+{
+  "project": "Recall",
+  "sprint_backlog": [
+    {
+      "id": "REC-001",
+      "type": "Performance Bottleneck",
+      "priority": "Critical",
+      "title": "Refactor `extract_all` to use ThreadPoolExecutor",
+      "status": "Completed",
+      "target_file": "src/recall/core.py",
+      "description": "The current `MultiSourceCorrelator.extract_all()` method utilizes a synchronous, sequential loop for API extraction and DSPy analysis. This blocks network I/O and causes severe performance degradation for large time windows. We need to implement a concurrent architecture.",
+      "acceptance_criteria": [
+        "Import and utilize `concurrent.futures.ThreadPoolExecutor` in the extraction loop.",
+        "Ensure worker threads are safely bound by the global `RateLimiter`.",
+        "Extraction and analysis tasks process in parallel without causing race conditions in the target dictionaries/lists.",
+        "Overall execution time for multi-day extractions is significantly reduced."
+      ]
+    },
+    {
+      "id": "REC-002",
+      "type": "Bug / Refactor",
+      "priority": "High",
+      "title": "Remove Heuristic Dictionary Parsing in Insight Extraction",
+      "status": "Completed",
+      "target_file": "src/recall/core.py",
+      "description": "The `analyze_session_insights()` function relies on brittle `try/except` blocks and dictionary key-sniffing heuristics (e.g., checking for strings > 50 chars) to parse LLM outputs. It must be updated to trust the structured Pydantic payloads returned by the upgraded DSPy `SessionInsightModule`.",
+      "acceptance_criteria": [
+        "Remove all heuristic string-length checking logic from `analyze_session_insights`.",
+        "Strictly cast and validate the `model_dump()` output from `SessionInsightModule` using Pydantic models.",
+        "Implement explicit error handling for validation failures rather than silent fallback mutations."
+      ]
+    },
+    {
+      "id": "REC-003",
+      "type": "Risk Mitigation",
+      "priority": "High",
+      "title": "Implement Dual-Write Reconciliation Job",
+      "status": "Completed",
+      "target_file": "src/recall/db/manager.py",
+      "description": "If ChromaDB embedding generation fails, `PersistenceManager` correctly marks the SQLite record status as 'failed' to prevent data loss. However, there is no mechanism to automatically retry these orphaned records on startup.",
+      "acceptance_criteria": [
+        "Create a `reconcile_failed_vectors()` method in `PersistenceManager`.",
+        "Trigger this method automatically on application startup or via a dedicated CLI command.",
+        "The method should query SQLite for sessions with `indexing_status='failed'`, regenerate their chunks, and attempt to re-insert them into ChromaDB.",
+        "Update the SQLite status to 'completed' upon successful reconciliation."
+      ]
+    },
+    {
+      "id": "REC-004",
+      "type": "Optimization",
+      "priority": "Medium",
+      "title": "Optimize Tiktoken Initialization",
+      "status": "Completed",
+      "target_file": "src/recall/core.py",
+      "description": "The `estimate_session_tokens()` method performs an inline import and initialization of the `tiktoken` encoding on every call, creating unnecessary overhead during high-volume operations.",
+      "acceptance_criteria": [
+        "Move the `tiktoken` import to the module level.",
+        "Cache the `tiktoken.get_encoding('cl100k_base')` initialization so it is reused across function calls rather than instantiated per session."
+      ]
+    },
+    {
+      "id": "REC-005",
+      "type": "Optimization",
+      "priority": "Medium",
+      "title": "Implement ChromaDB Batch Upserts",
+      "target_file": "src/recall/db/vector_store.py",
+      "description": "Vector chunks are currently added to ChromaDB sequentially or isolated by session. Transitioning to batch upserts will vastly improve ingestion throughput.",
+      "acceptance_criteria": [
+        "Refactor `VectorStore.add_chunks()` to accept multi-session lists of documents and metadata.",
+        "Batch the inserts before calling `self.collection.add()`.",
+        "Implement batch size limits to respect maximum payload thresholds for ChromaDB."
+      ]
+    },
+    {
+      "id": "REC-006",
+      "type": "Optimization",
+      "priority": "Low",
+      "title": "Migrate Ollama Embedding to Async HTTPX",
+      "target_file": "src/recall/db/vector_store.py",
+      "description": "The `OllamaEmbeddingFunction` uses a synchronous `httpx.Client`. Shifting to an asynchronous client will prevent thread locking when processing batch embeddings.",
+      "acceptance_criteria": [
+        "Replace `httpx.Client` with `httpx.AsyncClient` inside `OllamaEmbeddingFunction`.",
+        "Update the calling methods to gracefully handle the asynchronous embedding requests."
+      ]
+    },
+    {
+      "id": "REC-007",
+      "type": "Architecture / Tech Debt",
+      "priority": "Medium",
+      "title": "Implement Dependency Injection for LLM Providers",
+      "target_file": "Multiple (Providers, Core, DB)",
+      "description": "To facilitate robust unit and integration testing without relying on live API calls or local Ollama instances, the system needs Dependency Injection for its external clients.",
+      "acceptance_criteria": [
+        "Refactor Provider classes and the `MultiSourceCorrelator` to accept HTTP clients and DSPy LM instances via their constructors.",
+        "Create mock clients/providers for the test suite.",
+        "Ensure local integration tests for the Dual-Write state machine can run entirely offline using injected mocks."
+      ]
+    }
+  ]
+}

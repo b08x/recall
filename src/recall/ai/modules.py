@@ -130,6 +130,7 @@ if DSPY_AVAILABLE:
             self.limiter = get_default_limiter()
 
         def forward(self, sessions: List[Dict], commits: List[Dict], file_changes: List[Dict]):
+            debug(f"CorrelationModule: synthesizing timeline from {len(sessions)} sessions and {len(commits)} commits")
             # Stage 1: Synthesize timeline
             self.limiter.wait()
             
@@ -139,14 +140,17 @@ if DSPY_AVAILABLE:
                 commits=commits,
                 file_changes=file_changes
             )
+            debug(f"CorrelationModule: timeline synthesized. Narrative length: {len(timeline_result.narrative)}")
 
             # Stage 2: Generate One Thing
+            debug("CorrelationModule: generating 'One Thing'")
             self.limiter.wait()
             one_thing_result = self.one_thing(
                 recent_activity=timeline_result.narrative,
                 workstreams=timeline_result.workstreams,
                 open_questions=[]  # Could be extracted from session analysis
             )
+            debug(f"CorrelationModule: 'One Thing' generated: {one_thing_result.one_thing[:50]}...")
 
             return {
                 "narrative": timeline_result.narrative,
