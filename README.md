@@ -4,10 +4,12 @@ Recall is a multi-platform session extraction and correlation tool. It gathers c
 
 ## Features
 
-- **Multi-Source Extraction**: Seamlessly pull sessions from Gemini CLI, Claude Code, Hermes Agent, and more.
+- **Transactional Dual-Writes**: Atomic synchronization between relational SQLite data and ChromaDB vector chunks.
+- **Cost Management**: Integrated **Pre-flight Token Estimation** using `tiktoken` with user confirmation thresholds to prevent API cost overruns.
+- **Schema Safety**: Uses **DSPy TypedPredictors** and strict Pydantic models for AI-generated insights, ensuring output consistency.
+- **Precise Windowing**: Token-aware context management in the vector store to maximize input quality without backend failures.
+- **Auto-Migration**: Self-healing SQLite schema that automatically handles database updates.
 - **Robustness**: Built-in conservative rate limiting and exponential backoff retries for all AI and GitHub API interactions.
-- **Deep Insights**: Automatically extract categorized insights (Architecture, Technical Debt, Workflow) for each session with dedicated model and provider support.
-- **Analysis Caching**: Re-uses previous AI analyses stored in the database to minimize API costs and improve performance. Use `--overwrite` to force re-analysis.
 - **Semantic Search**: Leverage ChromaDB and Ollama (`embeddinggemma`) to find sessions based on meaning, not just keywords.
 - **Persistent Data Layer**: Automatic storage of all sessions, messages, and AI-driven analyses in a local SQLite database.
 - **Git Correlation**: Match AI sessions with local and remote Git commits to see code changes in context.
