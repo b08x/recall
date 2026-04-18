@@ -38,6 +38,7 @@ def main():
     p_extract.add_argument("--days", type=int, default=7, help="Days to extract")
     p_extract.add_argument("--platforms", help="Comma-separated platforms (gemini,hermes,claude,opencode,obsidian)")
     p_extract.add_argument("--analyze", action="store_true", help="Analyze session topics using DSPy")
+    p_extract.add_argument("--overwrite", action="store_true", help="Overwrite existing analysis in the database")
     p_extract.add_argument("--model", help="DSPy model identifier")
     p_extract.add_argument("--output", help="Output JSON file")
     
@@ -72,18 +73,18 @@ def main():
         
         if args.command == "extract":
             platforms = args.platforms.split(",") if args.platforms else None
-            tui.display_extraction_progress(correlator, args.days, platforms, args.analyze)
+            tui.display_extraction_progress(correlator, args.days, platforms, args.analyze, args.overwrite)
         
         elif args.command == "correlate":
             platforms = None # Default all
-            sessions = correlator.extract_all(args.days, platforms)
+            sessions = correlator.extract_all(args.days, platforms, overwrite=args.overwrite)
             tui.display_correlation(correlator, sessions, args.days, args.github_repo)
             
         sys.exit(0)
 
     if args.command == "extract":
         platforms = args.platforms.split(",") if args.platforms else None
-        results = correlator.extract_all(args.days, platforms, analyze=args.analyze, model=args.model)
+        results = correlator.extract_all(args.days, platforms, analyze=args.analyze, overwrite=args.overwrite, model=args.model)
         
         output = {}
         for platform, items in results.items():

@@ -58,6 +58,7 @@ class MultiSourceCorrelator:
     def extract_all(self, days: int = 7, 
                     platforms: Optional[List[str]] = None,
                     analyze: bool = False,
+                    overwrite: bool = False,
                     model: Optional[str] = None,
                     callback: Optional[callable] = None) -> Dict[str, List[Any]]:
         """
@@ -93,22 +94,37 @@ class MultiSourceCorrelator:
             for i, session in enumerate(sessions):
                 analysis_obj = None
                 if analyze:
-                    debug(f"Analyzing session {i+1}/{len(sessions)} (ID: {session.id})")
-                    if callback:
-                        callback(f"Analyzing {platform} {i+1}/{len(sessions)}...", progress=0.5)
+                    # Check for existing analysis unless overwrite is True
+                    existing_analysis = None
+                    if not overwrite:
+                        existing_analysis = self.db.get_analysis(session.id)
                     
-                    analysis_data = self.analyze_session_topics(session, model=model)
-                    session.summary = analysis_data.get("topics", [])
-                    if session.summary:
-                        session.generated_title = session.summary[0]
-                    
-                    analysis_obj = SessionAnalysis(
-                        session_id=session.id,
-                        topics=analysis_data.get("topics", []),
-                        files_touched=analysis_data.get("files_touched", []),
-                        key_actions=analysis_data.get("key_actions", []),
-                        analyzed_at=datetime.now(timezone.utc)
-                    )
+                    if existing_analysis:
+                        info(f"Re-using existing analysis for session {session.id}")
+                        if callback:
+                            callback(f"Re-using analysis for {platform} {i+1}/{len(sessions)}...", progress=0.5)
+                        
+                        session.summary = existing_analysis.topics
+                        if session.summary:
+                            session.generated_title = session.summary[0]
+                        analysis_obj = existing_analysis
+                    else:
+                        debug(f"Analyzing session {i+1}/{len(sessions)} (ID: {session.id})")
+                        if callback:
+                            callback(f"Analyzing {platform} {i+1}/{len(sessions)}...", progress=0.5)
+                        
+                        analysis_data = self.analyze_session_topics(session, model=model)
+                        session.summary = analysis_data.get("topics", [])
+                        if session.summary:
+                            session.generated_title = session.summary[0]
+                        
+                        analysis_obj = SessionAnalysis(
+                            session_id=session.id,
+                            topics=analysis_data.get("topics", []),
+                            files_touched=analysis_data.get("files_touched", []),
+                            key_actions=analysis_data.get("key_actions", []),
+                            analyzed_at=datetime.now(timezone.utc)
+                        )
                 
                 # Persist each session as it is processed
                 debug(f"Persisting session {session.id} to storage")

@@ -11,6 +11,7 @@ Recall is a modern Python application designed for multi-platform session extrac
   - **Rich**: Powers the terminal user interface (TUI) and dashboard.
   - **Pydantic / Pydantic-Settings**: Handles data modeling and decoupled configuration.
   - **DSPy**: Powers the AI correlation and session analysis modules. Supports OpenRouter, OpenAI, Ollama, and Mistral.
+  - **Tenacity**: Provides robust exponential backoff retry logic for API interactions.
   - **SQLite**: Used for session and message persistence, as well as local state discovery for certain providers (Hermes, OpenCode).
   - **ChromaDB**: Vector database for semantic search and retrieval of session chunks.
   - **Ollama**: Provides local embeddings via `embeddinggemma` for the vector store.
@@ -23,6 +24,7 @@ The project follows a standard `src`-layout for modern Python packages:
   - `core.py`: Main orchestration logic (`MultiSourceCorrelator`).
   - `cli.py`: Command-line interface entry point.
   - `config.py`: Configuration management via `.env.local`.
+  - `utils/`: Common utilities including `RateLimiter` and retry decorators.
   - `models.py`: Unified dataclass and Pydantic models for sessions and messages.
   - `tui.py`: Rich-based dashboard and progress visualization.
   - `logging.py`: Centralized debug logging system.
@@ -55,7 +57,7 @@ uv run recall --tui correlate --github-repo owner/repo
 ```
 
 ### Configuration
-Manage paths and API keys in `.env.local`. See `.env.local.example` for the available fields.
+Manage paths, API keys, and rate limits in `.env.local`. See `.env.local.example` for the available fields including `REQUESTS_PER_MINUTE` and `RETRY_MAX_ATTEMPTS`.
 
 ## Development Conventions
 
@@ -64,6 +66,7 @@ Manage paths and API keys in `.env.local`. See `.env.local.example` for the avai
   - Follow modern Python idioms and type hints.
   - Use absolute imports within the `recall` namespace.
 - **Logging**: Use the centralized `recall.logging` module (`debug`, `info`, `error`) to ensure logs are captured both in the log file and the TUI dashboard.
+- **Analysis Caching**: Session analysis (topics, files, actions) is cached in SQLite. Subsequent extractions will re-use this data unless the `--overwrite` flag is used.
 - **AI Logic**: All LLM interactions should be encapsulated within DSPy modules in `src/recall/ai/`.
 - **Validation**: After modifying core logic, verify both standard CLI output and TUI rendering integrity.
 

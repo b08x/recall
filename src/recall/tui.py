@@ -154,7 +154,7 @@ class RecallTUI:
 
         self.layout["bottom_right"].update(Panel(content, title="AI Insights & Next Actions", border_style="magenta"))
 
-    def display_extraction_progress(self, correlator, days: int, platforms: Optional[List[str]] = None, analyze: bool = False):
+    def display_extraction_progress(self, correlator, days: int, platforms: Optional[List[str]] = None, analyze: bool = False, overwrite: bool = False):
         """Run extraction with a live progress display."""
         progress = Progress(
             SpinnerColumn(),
@@ -180,6 +180,7 @@ class RecallTUI:
                 days=days, 
                 platforms=platforms, 
                 analyze=analyze,
+                overwrite=overwrite,
                 callback=update_progress
             )
             

@@ -5,6 +5,8 @@ Recall is a multi-platform session extraction and correlation tool. It gathers c
 ## Features
 
 - **Multi-Source Extraction**: Seamlessly pull sessions from Gemini CLI, Claude Code, Hermes Agent, and more.
+- **Robustness**: Built-in conservative rate limiting and exponential backoff retries for all AI and GitHub API interactions.
+- **Analysis Caching**: Re-uses previous AI analyses stored in the database to minimize API costs and improve performance. Use `--overwrite` to force re-analysis.
 - **Semantic Search**: Leverage ChromaDB and Ollama (`embeddinggemma`) to find sessions based on meaning, not just keywords.
 - **Persistent Data Layer**: Automatic storage of all sessions, messages, and AI-driven analyses in a local SQLite database.
 - **Git Correlation**: Match AI sessions with local and remote Git commits to see code changes in context.
@@ -29,11 +31,11 @@ uv sync
 
 ## Configuration
 
-Copy the example environment file and fill in your API keys:
+Copy the example environment file and fill in your API keys and rate limits:
 
 ```bash
 cp .env.local.example .env.local
-# Edit .env.local with your settings
+# Edit .env.local with your settings (API keys, requests per minute, etc.)
 ```
 
 ## Usage
@@ -52,6 +54,8 @@ uv run recall --tui correlate --days 7 --github-repo owner/repo
 Extract sessions and persist them:
 ```bash
 uv run recall extract --days 7 --platforms gemini,claude --analyze
+# Use --overwrite to re-run AI analysis for previously processed sessions
+uv run recall extract --days 7 --analyze --overwrite
 ```
 
 Semantic search across all saved sessions:

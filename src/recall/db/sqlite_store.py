@@ -199,3 +199,43 @@ class SQLiteStore:
             # This is a simplified reconstruction for brevity
             # In a real impl, we'd rebuild the full nested dataclass structure
             return row # Returning raw row for now to keep the example concise
+
+    def get_analysis(self, session_id: str) -> Optional[SessionAnalysis]:
+        """Retrieve saved analysis for a session."""
+        with self._get_connection() as conn:
+            # 1. Get base analysis
+            row = conn.execute(
+                "SELECT key_actions, analyzed_at FROM session_analysis WHERE session_id = ?", 
+                (session_id,)
+            ).fetchone()
+            if not row:
+                return None
+            
+            analyzed_at = datetime.fromisoformat(row['analyzed_at']) if isinstance(row['analyzed_at'], str) else row['analyzed_at']
+            key_actions = json.loads(row['key_actions']) if row['key_actions'] else []
+
+            # 2. Get topics
+            topics = []
+            topic_rows = conn.execute("""
+                SELECT t.name FROM topics t
+                JOIN session_topics st ON t.id = st.topic_id
+                WHERE st.session_id = ?
+            """, (session_id,)).fetchall()
+            topics = [r['name'] for r in topic_rows]
+
+            # 3. Get files
+            files = []
+            file_rows = conn.execute("""
+                SELECT f.path FROM file_paths f
+                JOIN session_files sf ON f.id = sf.file_id
+                WHERE sf.session_id = ?
+            """, (session_id,)).fetchall()
+            files = [r['path'] for r in file_rows]
+
+            return SessionAnalysis(
+                session_id=session_id,
+                topics=topics,
+                files_touched=files,
+                key_actions=key_actions,
+                analyzed_at=analyzed_at
+            )

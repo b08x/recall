@@ -46,6 +46,10 @@ class PersistenceManager:
         """Save synthesized correlation data."""
         self.sqlite.save_correlation(result)
 
+    def get_analysis(self, session_id: str) -> Optional[SessionAnalysis]:
+        """Retrieve saved analysis for a session from relational store."""
+        return self.sqlite.get_analysis(session_id)
+
     def semantic_search(self, query: str, platform: Optional[str] = None) -> Dict[str, Any]:
         """Hybrid search: Find relevant chunks and return their session context."""
         where = {"platform": platform} if platform else None
