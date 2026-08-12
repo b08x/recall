@@ -1,5 +1,7 @@
 import time
 import logging
+import threading
+from collections import deque
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 from rich.console import Console
@@ -18,43 +20,45 @@ class RecallTUI:
     def __init__(self):
         self.console = Console()
         self.layout = Layout()
-        self.logs = []
+        self.logs = deque(maxlen=100)
+        self._lock = threading.Lock()
         self._setup_layout()
         self._setup_logging()
 
     def _setup_layout(self):
         """Initialize the dashboard layout."""
-        self.layout.split_column(
-            Layout(name="header", size=3),
-            Layout(name="main"),
-            Layout(name="footer", size=3)
-        )
-        self.layout["main"].split_row(
-            Layout(name="left", ratio=1),
-            Layout(name="right", ratio=2)
-        )
-        self.layout["right"].split_column(
-            Layout(name="top_right", ratio=1),
-            Layout(name="bottom_right", ratio=1)
-        )
+        with self._lock:
+            self.layout.split_column(
+                Layout(name="header", size=3),
+                Layout(name="main"),
+                Layout(name="footer", size=3)
+            )
+            self.layout["main"].split_row(
+                Layout(name="left", ratio=1),
+                Layout(name="right", ratio=2)
+            )
+            self.layout["right"].split_column(
+                Layout(name="top_right", ratio=1),
+                Layout(name="bottom_right", ratio=1)
+            )
 
-        self.layout["header"].update(
-            Panel(
-                Align.center(Text("RECALL: Multi-platform Session Correlator", style="bold cyan")),
-                box=box.ROUNDED,
-                style="blue"
+            self.layout["header"].update(
+                Panel(
+                    Align.center(Text("RECALL: Multi-platform Session Correlator", style="bold cyan")),
+                    box=box.ROUNDED,
+                    style="blue"
+                )
             )
-        )
-        self.layout["footer"].update(
-            Panel(
-                Align.center(Text("Press Ctrl+C to exit", style="dim")),
-                box=box.ROUNDED
+            self.layout["footer"].update(
+                Panel(
+                    Align.center(Text("Press Ctrl+C to exit", style="dim")),
+                    box=box.ROUNDED
+                )
             )
-        )
-        
-        # Default empty panels
-        self.layout["top_right"].update(Panel(Text("Waiting for activity...", style="dim"), title="Activity", border_style="blue"))
-        self.layout["bottom_right"].update(Panel(Text("No insights generated yet.", style="dim"), title="Logs", border_style="white"))
+            
+            # Default empty panels
+            self.layout["top_right"].update(Panel(Text("Waiting for activity...", style="dim"), title="Activity", border_style="blue"))
+            self.layout["bottom_right"].update(Panel(Text("No insights generated yet.", style="dim"), title="Logs", border_style="white"))
 
     def _setup_logging(self):
         """Setup a logging handler to capture logs for the TUI."""
@@ -66,8 +70,6 @@ class RecallTUI:
             def emit(self, record):
                 msg = self.format(record)
                 self.tui.logs.append(msg)
-                if len(self.tui.logs) > 100:
-                    self.tui.logs.pop(0)
 
         handler = TUIHandler(self)
         handler.setFormatter(logging.Formatter('%(message)s'))
@@ -76,7 +78,11 @@ class RecallTUI:
     def render_logs(self):
         """Render the captured logs in the bottom right panel."""
         log_text = Text()
-        for log in self.logs[-15:]:  # Last 15 logs
+        # Copy logs to avoid issues with concurrent modification
+        with self._lock:
+            current_logs = list(self.logs)
+            
+        for log in current_logs[-15:]:  # Last 15 logs
             if "Error" in log or "error" in log.lower():
                 log_text.append(f" {log}\n", style="red")
             elif "Processing" in log or "Extracting" in log or "Analyzing" in log:
@@ -84,7 +90,8 @@ class RecallTUI:
             else:
                 log_text.append(f" {log}\n", style="dim")
         
-        self.layout["bottom_right"].update(Panel(log_text, title="Debug Logs", border_style="white"))
+        with self._lock:
+            self.layout["bottom_right"].update(Panel(log_text, title="Debug Logs", border_style="white"))
 
     def render_extraction(self, platforms_data: Dict[str, List[Any]]):
         """Render the extraction results in a table."""
@@ -107,7 +114,8 @@ class RecallTUI:
             
             table.add_row(platform, str(len(items)), latest)
 
-        self.layout["left"].update(Panel(table, title="Sources", border_style="green"))
+        with self._lock:
+            self.layout["left"].update(Panel(table, title="Sources", border_style="green"))
 
     def render_timeline(self, timeline: List[Dict]):
         """Render a mini-timeline of recent events."""
@@ -131,7 +139,8 @@ class RecallTUI:
                 event.get("summary", "")[:60]
             )
 
-        self.layout["top_right"].update(Panel(table, title="Recent Activity Timeline", border_style="blue"))
+        with self._lock:
+            self.layout["top_right"].update(Panel(table, title="Recent Activity Timeline", border_style="blue"))
 
     def render_correlation(self, correlation: Dict):
         """Render the AI correlation narrative and next actions."""
@@ -152,9 +161,17 @@ class RecallTUI:
             for action in next_actions:
                 content.append(f" • {action}\n")
 
-        self.layout["bottom_right"].update(Panel(content, title="AI Insights & Next Actions", border_style="magenta"))
+        with self._lock:
+            self.layout["bottom_right"].update(Panel(content, title="AI Insights & Next Actions", border_style="magenta"))
 
-    def display_extraction_progress(self, correlator, days: int, platforms: Optional[List[str]] = None, analyze: bool = False, overwrite: bool = False, enhance_context: bool = False):
+    def display_extraction_progress(self, 
+                                   correlator, 
+                                   days: int, 
+                                   platforms: Optional[List[str]] = None, 
+                                   analyze: bool = False, 
+                                   overwrite: bool = False, 
+                                   enhance_context: bool = False,
+                                   discovered_sessions: Optional[Dict[str, List[Any]]] = None):
         """Run extraction with a live progress display."""
         progress = Progress(
             SpinnerColumn(),
@@ -168,12 +185,25 @@ class RecallTUI:
         def update_progress(description: str, progress_val: float = 0.0, **kwargs):
             # The callback might be called with 'progress' keyword
             p = kwargs.get('progress', progress_val)
-            progress.update(task, description=description, completed=p * 100)
+            if p is not None:
+                progress.update(task, description=description, completed=p * 100)
+            else:
+                progress.update(task, description=description)
+            
+            # Update Activity panel with current description
+            with self._lock:
+                self.layout["top_right"].update(Panel(
+                    Align.center(Text(description, style="bold cyan")),
+                    title="Current Activity",
+                    border_style="blue"
+                ))
+            
             # Update logs in the layout
             self.render_logs()
 
         with Live(self.layout, refresh_per_second=4, screen=True):
-            self.layout["left"].update(Panel(progress, title="Progress", border_style="yellow"))
+            with self._lock:
+                self.layout["left"].update(Panel(progress, title="Progress", border_style="yellow"))
             
             # Execute extraction
             results = correlator.extract_all(
@@ -182,7 +212,8 @@ class RecallTUI:
                 analyze=analyze,
                 overwrite=overwrite,
                 enhance_with_context=enhance_context,
-                callback=update_progress
+                callback=update_progress,
+                discovered_sessions=discovered_sessions
             )
             
             self.render_extraction(results)

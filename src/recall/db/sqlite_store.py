@@ -270,6 +270,12 @@ class SQLiteStore:
             conn.execute("UPDATE sessions SET indexing_status = ? WHERE id = ?", (status, session_id))
             conn.commit()
 
+    def reset_all_indexing_status(self):
+        """Reset indexing status for all sessions to 'pending'."""
+        with self._get_connection() as conn:
+            conn.execute("UPDATE sessions SET indexing_status = 'pending'")
+            conn.commit()
+
     def get_failed_indexing_sessions(self) -> List[str]:
         """Find sessions that are marked as 'failed' or are still 'pending'."""
         with self._get_connection() as conn:
@@ -447,6 +453,62 @@ class SQLiteStore:
             cursor = conn.execute("SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp", (session_id,))
             session['messages'] = [dict(r) for r in cursor.fetchall()]
             return session
+
+    def get_parsed_session(self, session_id: str) -> Optional[ParsedSession]:
+        """Get a single session as a ParsedSession object."""
+        session_dict = self.get_session(session_id)
+        if not session_dict:
+            return None
+        
+        # Helper to parse datetime
+        def parse_dt(dt_str):
+            if not dt_str: return None
+            try:
+                return datetime.fromisoformat(dt_str)
+            except:
+                return None
+
+        # Reconstruct messages
+        messages = []
+        for m in session_dict.get('messages', []):
+            # Fetch tool calls for this message
+            with self._get_connection() as conn:
+                cursor = conn.execute("SELECT * FROM tool_calls WHERE message_id = ?", (m['id'],))
+                tcs = []
+                for tc_row in cursor.fetchall():
+                    tcs.append(ToolCall(
+                        id=tc_row['id'],
+                        name=tc_row['name'],
+                        input=json.loads(tc_row['input']) if tc_row['input'] else {}
+                    ))
+
+            messages.append(ParsedMessage(
+                id=m['id'],
+                session_id=session_id,
+                type=m['type'],
+                content=m['content'],
+                thinking=m['thinking'],
+                timestamp=parse_dt(m['timestamp']),
+                parent_id=m['parent_id'],
+                usage=json.loads(m['usage']) if m['usage'] else {},
+                tool_calls=tcs
+            ))
+
+        # Reconstruct session
+        return ParsedSession(
+            id=session_dict['id'],
+            project_path=session_dict['project_path'],
+            project_name=session_dict['project_name'],
+            summary=json.loads(session_dict['summary']) if session_dict['summary'] else None,
+            generated_title=session_dict['generated_title'],
+            started_at=parse_dt(session_dict['started_at']),
+            ended_at=parse_dt(session_dict['ended_at']),
+            message_count=session_dict['message_count'],
+            git_branch=session_dict['git_branch'],
+            source_tool=session_dict['source_tool'],
+            claude_version=json.loads(session_dict['metadata']).get('claude_version') if session_dict['metadata'] else None,
+            messages=messages
+        )
 
     def search_sessions(self, query: str) -> List[Dict[str, Any]]:
         """Simple keyword search across sessions and messages."""

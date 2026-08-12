@@ -97,6 +97,15 @@ uv run recall dlq --retry
 uv run recall dlq --clear
 ```
 
+## Documentation
+
+Comprehensive documentation of the system architecture, data pipelines, and storage mechanisms is available in the `docs/` directory:
+
+- **[System Architecture](docs/architecture.md)**: High-level overview, layered component diagram, and core data models.
+- **[CLI Usage Guide](docs/cli_usage.md)**: Command reference, flags, and quick start recipes.
+- **[Data Pipelines](docs/pipelines.md)**: Detailed trace of session extraction, analysis, context enhancement, and correlation workflows.
+- **[Storage & Persistence](docs/storage.md)**: SQLite relational schema (ERD) and ChromaDB vector search strategy.
+
 ## Project Structure
 
 - `src/recall/core.py`: The main orchestration engine.

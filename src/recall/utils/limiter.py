@@ -28,33 +28,50 @@ class RateLimiter:
         if self.interval == 0:
             return
             
+        wait_time = 0
         with self._lock:
             now = time.time()
             elapsed = now - self.last_call
             wait_time = self.interval - elapsed
             
             if wait_time > 0:
-                debug(f"RateLimiter[{self.name}] waiting {wait_time:.2f}s")
-                time.sleep(wait_time)
-                
-            self.last_call = time.time()
+                # We update last_call as if we already waited 
+                # to reserve the slot and let other threads 
+                # calculate their own wait_time relative to this one.
+                self.last_call = now + wait_time
+            else:
+                self.last_call = now
+                wait_time = 0
+        
+        if wait_time > 0:
+            debug(f"RateLimiter[{self.name}] waiting {wait_time:.2f}s")
+            time.sleep(wait_time)
 
 class RateLimiterGroup:
     """Manages a collection of named RateLimiter instances."""
     
     def __init__(self, default_rpm: int = 20):
         self.default_rpm = default_rpm
+        self._specific_rpms: Dict[str, int] = {}
         self._limiters: Dict[str, RateLimiter] = {
             "default": RateLimiter(default_rpm, "default")
         }
         self._lock = threading.Lock()
 
+    def set_rpm(self, name: str, rpm: int):
+        """Pre-configure or update RPM for a specific named limiter."""
+        with self._lock:
+            self._specific_rpms[name] = rpm
+            if name in self._limiters:
+                self._limiters[name] = RateLimiter(rpm, name)
+
     def get(self, name: str) -> RateLimiter:
         """Get or create a named rate limiter."""
         with self._lock:
             if name not in self._limiters:
-                debug(f"Creating new RateLimiter for provider: {name} ({self.default_rpm} RPM)")
-                self._limiters[name] = RateLimiter(self.default_rpm, name)
+                rpm = self._specific_rpms.get(name, self.default_rpm)
+                debug(f"Creating new RateLimiter for provider: {name} ({rpm} RPM)")
+                self._limiters[name] = RateLimiter(rpm, name)
             return self._limiters[name]
 
 # Global group instance
@@ -62,6 +79,10 @@ _limiter_group = RateLimiterGroup()
 
 def get_limiter(name: str = "default") -> RateLimiter:
     return _limiter_group.get(name)
+
+def set_limiter_rpm(name: str, rpm: int):
+    """Set RPM for a specific named limiter."""
+    _limiter_group.set_rpm(name, rpm)
 
 def get_default_limiter() -> RateLimiter:
     """Alias for get_limiter('default')"""

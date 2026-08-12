@@ -22,7 +22,7 @@ from recall.models import (
 from recall.context import create_context_manager
 from recall.config import Settings
 from recall.logging import debug, info, error, step, log_metric, log_data
-from recall.utils.limiter import get_limiter, get_retry_decorator, rate_limited, set_global_rpm
+from recall.utils.limiter import get_limiter, get_retry_decorator, rate_limited, set_global_rpm, set_limiter_rpm
 
 try:
     import dspy
@@ -46,6 +46,7 @@ class MultiSourceCorrelator:
         
         # Rate Limiting - Configure global RPM and use named limiters
         set_global_rpm(self.settings.requests_per_minute)
+        set_limiter_rpm("embeddings", self.settings.embedding_rpm)
 
         self.providers = {
             "gemini": GeminiProvider(),
@@ -56,12 +57,23 @@ class MultiSourceCorrelator:
         self.obsidian = ObsidianProvider(str(self.settings.resolved_notebook_path))
         self.local_git = LocalGitProvider(str(self.settings.resolved_workspace_path))
         
+        # Determine API key for embedding provider
+        embedding_api_key = None
+        if self.settings.embedding_provider == "openai":
+            embedding_api_key = self.settings.openai_api_key
+        elif self.settings.embedding_provider == "mistral":
+            embedding_api_key = self.settings.mistral_api_key
+        elif self.settings.embedding_provider == "huggingface":
+            embedding_api_key = self.settings.huggingface_api_key
+
         # Persistence Layer
         self.db = PersistenceManager(
             db_path=self.settings.db_path,
             vector_dir=self.settings.vector_db_dir,
+            embedding_provider=self.settings.embedding_provider,
+            embedding_model=self.settings.embedding_model,
             ollama_host=self.settings.ollama_host,
-            ollama_model=self.settings.embedding_model,
+            embedding_api_key=embedding_api_key,
             embedding_max_tokens=self.settings.embedding_max_tokens,
             chunk_max_chars=self.settings.chunk_max_chars
         )
@@ -72,9 +84,6 @@ class MultiSourceCorrelator:
 
         # Context enhancement manager
         self.context_manager = create_context_manager(self.settings) if self.settings.enable_context_enhancement else None
-
-        # Run reconciliation for any failed indexing jobs from previous runs
-        self.db.reconcile_failed_vectors()
 
     def estimate_session_tokens(self, sessions: List[ParsedSession]) -> int:
         """Estimate the total number of tokens across a list of sessions."""
@@ -210,7 +219,7 @@ class MultiSourceCorrelator:
         # Persist session
         debug(f"Persisting session {session.id} to storage")
         try:
-            self.db.persist_session(session, analysis_obj, insight_obj, overwrite=overwrite)
+            self.db.persist_session(session, analysis_obj, insight_obj, overwrite=overwrite, callback=callback)
         except Exception as e:
             error(f"Failed to persist session {session.id}: {e}")
 
@@ -222,7 +231,8 @@ class MultiSourceCorrelator:
                     insights_model: Optional[str] = None,
                     insights_provider: Optional[str] = None,
                     enhance_with_context: bool = False,
-                    callback: Optional[callable] = None) -> Dict[str, List[Any]]:
+                    callback: Optional[callable] = None,
+                    discovered_sessions: Optional[Dict[str, List[ParsedSession]]] = None) -> Dict[str, List[Any]]:
         """
         Extract sessions and notes from all platforms and persist them.
         Uses ThreadPoolExecutor for concurrent analysis and persistence.
@@ -249,8 +259,18 @@ class MultiSourceCorrelator:
         with ThreadPoolExecutor(max_workers=self.settings.max_workers) as executor:
             for platform in target_platforms:
                 debug(f"Processing platform: {platform}")
+                
+                # Check for pre-discovered sessions
+                sessions = None
+                if discovered_sessions and platform in discovered_sessions:
+                    sessions = discovered_sessions[platform]
+                    debug(f"Using {len(sessions)} pre-discovered sessions for {platform}")
+
                 if callback:
-                    callback(f"Extracting from {platform}...", progress=0.2)
+                    if sessions:
+                        callback(f"Using {len(sessions)} discovered sessions from {platform}...", progress=0.1)
+                    else:
+                        callback(f"Discovering sessions from {platform}...", progress=0.1)
                     
                 if platform == "obsidian":
                     notes = self.obsidian.extract(date_range)
@@ -263,12 +283,18 @@ class MultiSourceCorrelator:
                     continue
                 
                 provider = self.providers[platform]
-                sessions = provider.extract(date_range)
-                debug(f"Extracted {len(sessions)} sessions from {platform}")
+                if not sessions:
+                    sessions = provider.extract(date_range)
+                    debug(f"Extracted {len(sessions)} sessions from {platform}")
+                
                 results[platform] = sessions
                 log_metric("sessions_per_platform", len(sessions))
                 
-                for session in sessions:
+                total_sessions = len(sessions)
+                for i, session in enumerate(sessions):
+                    if callback:
+                        callback(f"Processing {platform} session {i+1}/{total_sessions}...", progress=0.1 + (0.8 * (i / total_sessions)))
+                    
                     payload = {
                         "session": session,
                         "platform": platform,

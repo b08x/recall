@@ -29,13 +29,20 @@ def serialize_item(item: Any) -> Any:
 
 def main():
     parser = argparse.ArgumentParser(description="Recall: Multi-platform session extraction and correlation")
+    # Keep these as global to support 'recall --tui extract'
     parser.add_argument("--tui", action="store_true", help="Display results in a Rich TUI dashboard")
+    parser.add_argument("--embedding-provider", help="Embedding provider (ollama, openai, mistral, huggingface)")
+    parser.add_argument("--embedding-model", help="Embedding model identifier")
     
     sub = parser.add_subparsers(dest="command", required=True)
     
     # Extract command
     p_extract = sub.add_parser("extract", help="Extract sessions from platforms")
+    p_extract.add_argument("--tui", action="store_true", help="Display results in a Rich TUI dashboard")
+    p_extract.add_argument("--embedding-provider", help="Embedding provider")
+    p_extract.add_argument("--embedding-model", help="Embedding model")
     p_extract.add_argument("--days", type=int, default=7, help="Days to extract")
+    # ... rest of extract args ...
     p_extract.add_argument("--platforms", help="Comma-separated platforms (gemini,hermes,claude,opencode,obsidian)")
     p_extract.add_argument("--analyze", action="store_true", help="Analyze session topics using DSPy")
     p_extract.add_argument("--overwrite", action="store_true", help="Overwrite existing analysis in the database")
@@ -48,6 +55,9 @@ def main():
     
     # Correlate command
     p_correlate = sub.add_parser("correlate", help="Correlate sessions with GitHub and generate timeline")
+    p_correlate.add_argument("--tui", action="store_true", help="Display results in a Rich TUI dashboard")
+    p_correlate.add_argument("--embedding-provider", help="Embedding provider")
+    p_correlate.add_argument("--embedding-model", help="Embedding model")
     p_correlate.add_argument("--days", type=int, default=7)
     p_correlate.add_argument("--github-repo", help="GitHub repo (owner/name)")
     p_correlate.add_argument("--model", help="DSPy model identifier")
@@ -58,6 +68,8 @@ def main():
     
     # Search command
     p_search = sub.add_parser("search", help="Semantic search over saved sessions")
+    p_search.add_argument("--embedding-provider", help="Embedding provider")
+    p_search.add_argument("--embedding-model", help="Embedding model")
     p_search.add_argument("query", help="Search query")
     p_search.add_argument("--limit", type=int, default=5, help="Number of results")
     p_search.add_argument("--platform", help="Filter by platform (gemini, claude, etc.)")
@@ -70,7 +82,14 @@ def main():
     
     args = parser.parse_args()
     
-    settings = Settings()
+    # Override settings from CLI
+    settings_kwargs = {}
+    if args.embedding_provider:
+        settings_kwargs["embedding_provider"] = args.embedding_provider
+    if args.embedding_model:
+        settings_kwargs["embedding_model"] = args.embedding_model
+        
+    settings = Settings(**settings_kwargs)
     correlator = MultiSourceCorrelator(settings=settings)
 
     # Import rich components for search display
@@ -78,8 +97,90 @@ def main():
     from rich.table import Table
     from rich.panel import Panel
     from rich.markdown import Markdown
+    from rich.prompt import Prompt
     console = Console()
-    
+
+    # 1. Dimension compatibility check
+    compatible, existing_dim, model_dim = correlator.db.check_dimension_compatibility()
+    if not compatible:
+        console.print(f"\n[bold red]Error: Embedding Dimension Mismatch![/bold red]")
+        console.print(f"Current DB uses [bold]{existing_dim}[/bold] dimensions.")
+        console.print(f"Selected model [bold]{args.embedding_model or settings.embedding_model}[/bold] uses [bold]{model_dim}[/bold] dimensions.")
+        console.print("\nYou must either wipe the vector store or re-embed existing data.")
+        
+        choice = Prompt.ask(
+            "\nChoose an action",
+            choices=["wipe", "re-embed", "abort"],
+            default="abort"
+        )
+        
+        if choice == "abort":
+            console.print("[yellow]Aborting to prevent data corruption.[/yellow]")
+            sys.exit(1)
+            
+        console.print(f"[bold blue]Executing {choice}...[/bold blue]")
+        correlator.db.handle_migration(choice)
+        
+        # If re-embed was chosen, run reconciliation immediately
+        if choice == "re-embed":
+            console.print("[bold green]Starting re-embedding process...[/bold green]")
+            from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                console=console
+            ) as progress:
+                reindex_task = progress.add_task("[cyan]Re-indexing sessions...", total=100)
+                
+                def reindex_callback(desc: str, progress_val: float = None, **kwargs):
+                    p = kwargs.get('progress', progress_val)
+                    if p is not None:
+                        progress.update(reindex_task, description=desc, completed=p * 100)
+                    else:
+                        progress.update(reindex_task, description=desc)
+                
+                correlator.db.reconcile_failed_vectors(
+                    max_workers=settings.reindex_workers, 
+                    callback=reindex_callback
+                )
+            console.print("[bold green]✓ Re-embedding complete.[/bold green]")
+
+    # 2. Pre-flight check for tokens if analysis is requested and provider might be paid
+    discovered_sessions = None
+    if args.analyze and correlator.dspy_provider != "ollama":
+        console.print("\n[bold blue]Running pre-flight token estimation...[/bold blue]")
+        
+        # Collect sessions for estimation
+        from datetime import timedelta, timezone
+        cutoff = datetime.now(timezone.utc) - timedelta(days=args.days)
+        date_range = {'start': cutoff, 'end': datetime.now(timezone.utc)}
+        
+        platforms = args.platforms.split(",") if args.platforms else None
+        discovered_sessions = {}
+        sessions_to_check = []
+        for platform in (platforms or correlator.providers.keys()):
+            if platform in correlator.providers:
+                files = correlator.providers[platform].discover(date_range)
+                platform_sessions = []
+                for f in files:
+                    s = correlator.providers[platform].parse(f)
+                    if s: 
+                        platform_sessions.append(s)
+                        sessions_to_check.append(s)
+                discovered_sessions[platform] = platform_sessions
+        
+        token_count = correlator.estimate_session_tokens(sessions_to_check)
+        console.print(f"Estimated tokens for analysis: [bold]{token_count:,}[/bold]")
+        
+        # Simple threshold check
+        if token_count > 50000:
+            console.print("[yellow]Warning: High token count. Proceed? (y/n)[/yellow]")
+            if input().lower() != 'y':
+                sys.exit(0)
+
+    # 3. Execution (TUI or CLI)
     if args.tui:
         from recall.tui import RecallTUI
         tui = RecallTUI()
@@ -87,7 +188,11 @@ def main():
         if args.command == "extract":
             platforms = args.platforms.split(",") if args.platforms else None
             enhance_context = getattr(args, 'enhance_context', False)
-            tui.display_extraction_progress(correlator, args.days, platforms, args.analyze, args.overwrite, enhance_context)
+            tui.display_extraction_progress(
+                correlator, args.days, platforms, args.analyze, 
+                args.overwrite, enhance_context, 
+                discovered_sessions=discovered_sessions
+            )
         
         elif args.command == "correlate":
             platforms = None # Default all
@@ -97,7 +202,8 @@ def main():
                 platforms,
                 analyze=True,
                 overwrite=getattr(args, 'overwrite', False),
-                enhance_with_context=enhance_context
+                enhance_with_context=enhance_context,
+                discovered_sessions=discovered_sessions
             )
             tui.display_correlation(correlator, sessions, args.days, args.github_repo)
             
@@ -106,32 +212,6 @@ def main():
     if args.command == "extract":
         platforms = args.platforms.split(",") if args.platforms else None
         
-        # Pre-flight check for tokens if analysis is requested and provider might be paid
-        if args.analyze and correlator.dspy_provider != "ollama":
-            console.print("\n[bold blue]Running pre-flight token estimation...[/bold blue]")
-            
-            # Collect sessions for estimation
-            from datetime import timedelta, timezone
-            cutoff = datetime.now(timezone.utc) - timedelta(days=args.days)
-            date_range = {'start': cutoff, 'end': datetime.now(timezone.utc)}
-            
-            sessions_to_check = []
-            for platform in (platforms or correlator.providers.keys()):
-                if platform in correlator.providers:
-                    files = correlator.providers[platform].discover(date_range)
-                    for f in files:
-                        s = correlator.providers[platform].parse(f)
-                        if s: sessions_to_check.append(s)
-            
-            token_count = correlator.estimate_session_tokens(sessions_to_check)
-            console.print(f"Estimated tokens for analysis: [bold]{token_count:,}[/bold]")
-            
-            # Simple threshold check
-            if token_count > 50000:
-                console.print("[yellow]Warning: High token count. Proceed? (y/n)[/yellow]")
-                if input().lower() != 'y':
-                    sys.exit(0)
-
         results = correlator.extract_all(
             args.days,
             platforms,
@@ -140,7 +220,8 @@ def main():
             model=args.model,
             insights_model=args.insights_model,
             insights_provider=args.insights_provider,
-            enhance_with_context=getattr(args, 'enhance_context', False)
+            enhance_with_context=getattr(args, 'enhance_context', False),
+            discovered_sessions=discovered_sessions
         )
         
         output = {p: [serialize_item(s) for s in sessions] for p, sessions in results.items()}
