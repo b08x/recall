@@ -12,5 +12,30 @@ graphify-out/
 
 chroma_db/
 recall.db
+recall.db-shm
+
+recall.db-wal
 
 recall.log
+uv.lock
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.opencode
+.specs/
+.trackboi/
+.plans/
+.opencode/
+README.md
+HANDOFF.md
+diagrams/
+.agents/
+.gemini/
+.mcp.json
+.python-version
+.sift/
+.trackboi/
+
+chroma_db/
+docs/
+
