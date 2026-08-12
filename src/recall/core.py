@@ -139,8 +139,16 @@ class MultiSourceCorrelator:
             else:
                 debug(f"Analyzing session (ID: {session.id})")
                 
-                # 1. Topic/Activity Analysis
-                analysis_data = self.analyze_session_topics(session, model=analysis_model, provider=platform)
+                with ThreadPoolExecutor(max_workers=2) as inner_executor:
+                    topics_future = inner_executor.submit(
+                        self.analyze_session_topics, session, analysis_model, platform
+                    )
+                    insights_future = inner_executor.submit(
+                        self.analyze_session_insights, session, insights_model, insights_provider or platform
+                    )
+                    analysis_data = topics_future.result()
+                    insight_data = insights_future.result()
+
                 session.summary = analysis_data.get("topics", [])
                 if session.summary:
                     session.generated_title = session.summary[0]
@@ -151,14 +159,6 @@ class MultiSourceCorrelator:
                     files_touched=analysis_data.get("files_touched", []),
                     key_actions=analysis_data.get("key_actions", []),
                     analyzed_at=datetime.now(timezone.utc)
-                )
-
-                # 2. Insight Extraction (REC-002: Simplified Parsing)
-                # Pass the platform as the provider for rate limiting
-                insight_data = self.analyze_session_insights(
-                    session, 
-                    model=insights_model, 
-                    provider=insights_provider or platform
                 )
                 
                 valid_insights = []
@@ -554,29 +554,40 @@ class MultiSourceCorrelator:
         
         return results
 
-    def configure_dspy(self, model: Optional[str] = None, provider: Optional[str] = None):
-        """Configure DSPy with specified language model."""
+    def get_dspy_lm(self, model: Optional[str] = None, provider: Optional[str] = None):
+        """Get or create a DSPy language model instance with caching."""
         if not DSPY_AVAILABLE:
-            return False
+            return None
         
         provider = provider or self.dspy_provider
         model_id = model or self.dspy_model
         
+        cache_key = f"{provider}:{model_id}"
+        if not hasattr(self, '_lm_cache'):
+            self._lm_cache = {}
+            
+        if cache_key in self._lm_cache:
+            return self._lm_cache[cache_key]
+            
         try:
+            if not hasattr(self, '_dspy_adapter_set'):
+                dspy.configure(adapter=dspy.ChatAdapter())
+                self._dspy_adapter_set = True
+                
             if provider == 'openrouter':
                 api_key = self.settings.openrouter_api_key
                 if not api_key:
-                    return False
+                    return None
                 lm = dspy.LM(f"openrouter/{model_id}", api_key=api_key.get_secret_value(), base_url="https://openrouter.ai/api/v1", num_retries=self.settings.retry_max_attempts)
             elif provider == 'openai':
                 api_key = self.settings.openai_api_key
                 if not api_key:
-                    return False
+                    return None
                 lm = dspy.LM(model_id, api_key=api_key.get_secret_value(), num_retries=self.settings.retry_max_attempts)
             elif provider == 'mistral':
                 api_key = self.settings.mistral_api_key
                 if not api_key:
-                    return False
+                    return None
                 lm = dspy.LM(f"mistral/{model_id}", api_key=api_key.get_secret_value(), num_retries=self.settings.retry_max_attempts)
             elif provider == 'ollama':
                 _, model_name = model_id.split("/", 1) if "/" in model_id else ("", model_id)
@@ -591,15 +602,18 @@ class MultiSourceCorrelator:
                     api_key_val = os.environ.get(env_key)
                     lm = dspy.LM(f"{provider}/{model_id}", api_key=api_key_val, num_retries=self.settings.retry_max_attempts)
             
-            dspy.configure(lm=lm, adapter=dspy.ChatAdapter())
-            return True
-        except Exception:
-            return False
+            self._lm_cache[cache_key] = lm
+            return lm
+        except Exception as e:
+            error(f"Failed to configure DSPy LM: {e}")
+            return None
 
     def analyze_session_topics(self, session: ParsedSession, model: Optional[str] = None, provider: str = "default") -> Dict[str, Any]:
         """Use DSPy with contextual chunking to analyze session topics."""
         debug(f"Configuring DSPy for session analysis (model: {model or 'default'})")
-        if not DSPY_AVAILABLE or not self.configure_dspy(model):
+        # Do not pass 'provider' (which is the platform) to get_dspy_lm
+        lm = self.get_dspy_lm(model)
+        if not DSPY_AVAILABLE or not lm:
             debug("DSPy not available or configuration failed")
             return {"topics": [], "files_touched": [], "key_actions": []}
         
@@ -607,9 +621,10 @@ class MultiSourceCorrelator:
         analyzer = SessionAnalysisModule()
         analyzer.limiter = get_limiter(provider)
         try:
-            # We still wait once here to ensure the session processing itself is spaced out
-            analyzer.limiter.wait()
-            result = analyzer(session)
+            with dspy.context(lm=lm):
+                # We still wait once here to ensure the session processing itself is spaced out
+                analyzer.limiter.wait()
+                result = analyzer(session)
             debug(f"SessionAnalysisModule result: {result}")
             return result
         except Exception as e:
@@ -619,18 +634,23 @@ class MultiSourceCorrelator:
     def analyze_session_insights(self, session: ParsedSession, model: Optional[str] = None, provider: Optional[str] = None) -> Dict[str, Any]:
         """Use DSPy to extract categorized insights from a session."""
         debug(f"Configuring DSPy for session insights (model: {model or 'default'})")
-        # Use insights_provider if specified, otherwise the dspy_provider
-        active_provider = provider or self.settings.dspy_insights_provider or self.dspy_provider
         
-        if not DSPY_AVAILABLE or not self.configure_dspy(model, provider):
+        # 'provider' parameter is overloaded: it's used for the rate limiter name (the platform).
+        # We must decouple it from the LLM provider.
+        llm_provider = self.settings.dspy_insights_provider or self.dspy_provider
+        limiter_name = provider or llm_provider
+        
+        lm = self.get_dspy_lm(model, llm_provider)
+        if not DSPY_AVAILABLE or not lm:
             return {"insights": [], "primary_theme": "General", "confidence": 0.0}
         
         debug("Running SessionInsightModule")
         analyzer = SessionInsightModule()
-        analyzer.limiter = get_limiter(active_provider)
+        analyzer.limiter = get_limiter(limiter_name)
         try:
-            analyzer.limiter.wait()
-            result = analyzer(session)
+            with dspy.context(lm=lm):
+                analyzer.limiter.wait()
+                result = analyzer(session)
             debug(f"SessionInsightModule result: {result}")
             return result
         except Exception as e:
@@ -707,7 +727,8 @@ class MultiSourceCorrelator:
     def correlate_with_dspy(self, timeline: List[Dict], model: Optional[str] = None, context_summary: Optional[str] = None) -> Dict:
         """Use DSPy to generate correlated narrative and next actions."""
         debug(f"Correlating {len(timeline)} events with DSPy")
-        if not DSPY_AVAILABLE or not self.configure_dspy(model):
+        lm = self.get_dspy_lm(model)
+        if not DSPY_AVAILABLE or not lm:
             debug("DSPy not available, falling back to heuristic correlation")
             return self._heuristic_correlation(timeline)
         
@@ -734,13 +755,14 @@ class MultiSourceCorrelator:
         correlator.limiter = get_limiter("correlation")
         
         try:
-            correlator.limiter.wait()
-            result = correlator(
-                sessions=sessions,
-                commits=commits,
-                file_changes=[],
-                context_summary=context_summary
-            )
+            with dspy.context(lm=lm):
+                correlator.limiter.wait()
+                result = correlator(
+                    sessions=sessions,
+                    commits=commits,
+                    file_changes=[],
+                    context_summary=context_summary
+                )
             debug("DSPy correlation successful")
             return result
         except Exception as e:
